@@ -110,3 +110,16 @@ export const APPS = [
   ['Pinterest', 'Social & media', 'Boards and pins.'],
   ['Strava', 'Social & media', 'Activities and athlete stats.'],
 ];
+
+// Logos come from Composio's logo service (logos.composio.dev/api/<slug>), fetched by the page as it shows the list.
+// A name without a logo there, or no connection, just shows a lettered tile.
+const NO_LOGO = new Set(['AWS S3', 'Evernote', 'WooCommerce']);
+const SLUGS = { 'Microsoft Teams': 'microsoft_teams', 'Google Analytics': 'google_analytics', 'Docker Hub': 'docker_hub', OneDrive: 'one_drive',
+  SharePoint: 'share_point', 'Monday.com': 'monday', BigQuery: 'googlebigquery', 'Adobe Express': 'adobe', ActiveCampaign: 'active_campaign',
+  'X (Twitter)': 'twitter' };
+const KNOWN = new Set(APPS.map((a) => a[0]));
+
+export function logoSlug(name) {
+  if (!KNOWN.has(name) || NO_LOGO.has(name)) return null;
+  return SLUGS[name] || [...name.toLowerCase()].filter((c) => (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')).join('');
+}

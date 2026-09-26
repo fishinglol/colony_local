@@ -226,11 +226,13 @@ def test_the_workspace_mode_governs_connector_calls(monkeypatch):
 def test_links_open_in_the_real_browser_and_only_web_addresses(monkeypatch):
     import webbrowser
     opened = []
-    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
     assert client.post("/api/open-url", json={"url": "https://accounts.example.com/oauth?x=1"}).status_code == 200
     assert client.post("/api/open-url", json={"url": "file:///etc/passwd"}).status_code == 400
     assert client.post("/api/open-url", json={"url": "javascript:alert(1)"}).status_code == 400
     assert opened == ["https://accounts.example.com/oauth?x=1"]
+    monkeypatch.setattr(webbrowser, "open", lambda url: False)
+    assert client.post("/api/open-url", json={"url": "https://a.example/"}).status_code == 500
 
 
 def test_an_agent_only_gets_the_connectors_ticked_for_it_and_stays_within_its_apps(monkeypatch):

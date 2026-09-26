@@ -7,7 +7,7 @@ import { refreshContext } from './context.js';
 import { $, closeModal, el, openModal, toast } from './dom.js';
 import { renderFeed } from './feed.js';
 import { renderSidebar } from './sidebar.js';
-import { disconnect, emptyTools, loadServers, openToolPicker, toolRows, toolsForSave, toolsFromRole } from './tool-picker.js';
+import { disconnect, emptyTools, loadServers, openToolPicker, toolLogo, toolRows, toolsForSave, toolsFromRole } from './tool-picker.js';
 import { currentWorkspace, state } from './state.js';
 
 // Starting points for "Add agent". Everything is editable after picking one.
@@ -83,8 +83,7 @@ function renderToolRows() {
   const rows = toolRows(toolDraft);
   if (!rows.length) box.appendChild(el('small', null, 'No tools yet. This agent only chats.'));
   rows.forEach((r) => {
-    const row = el('div', 'tool-row'), logo = el('div', 'tp-logo', r.name.slice(0, 1).toUpperCase()), main = el('div', 'tr-main');
-    logo.style.background = roleColor(r.name.toLowerCase());
+    const row = el('div', 'tool-row'), logo = toolLogo(r), main = el('div', 'tr-main');
     main.append(el('div', 'tr-name', r.name), el('div', 'tr-scope', r.scope));
     const x = el('button', 'tr-x', '×'); x.type = 'button'; x.title = 'Disconnect';
     x.onclick = (e) => { e.stopPropagation(); toolDraft = disconnect(toolDraft, r.id); renderToolRows(); };

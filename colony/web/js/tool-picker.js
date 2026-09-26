@@ -6,7 +6,9 @@
 import { api } from './api.js';
 import { roleColor } from './avatar.js';
 import { $, el, toast } from './dom.js';
-import { APP_CATEGORIES, APPS } from './apps-catalog.js';
+import { renderSidebar, selectTarget } from './sidebar.js';
+import { currentWorkspace, state } from './state.js';
+import { APP_CATEGORIES, APPS, logoSlug } from './apps-catalog.js';
 
 const CATEGORIES = ['Files & storage', 'Browser & web', 'Communication', 'Productivity', 'Data & spreadsheets', 'Design & creative',
   'Developer tools', 'Sales & marketing', 'Finance & commerce', 'Social & media', 'Custom / API'];
@@ -98,6 +100,7 @@ function catalogue() {
     { id: EVERY_APP, kind: 'app', name: 'Every app in Composio', category: 'Productivity', blurb: 'One connection to 1000+ apps; connects each one the first time it is needed.' },
   ];
   APPS.forEach(([name, category, blurb]) => items.push({ id: `app:${name}`, kind: 'app', name, category, blurb }));
+  items.push({ id: 'new', kind: 'add', name: 'Add a connector', category: 'Custom / API', blurb: 'Connect any MCP server by its address or command.' });
   Object.keys(servers).filter((n) => n !== 'composio').forEach((n) => items.push({
     id: `srv:${n}`, kind: 'server', name: n, category: 'Custom / API', blurb: servers[n].url || `${servers[n].command} ${(servers[n].args || []).join(' ')}`.trim() }));
   return items;
@@ -106,7 +109,20 @@ function catalogue() {
 /* ── the window ────────────────────────────────────────────────────────────────────────── */
 let ctx = null, category = 'All', query = '', selected = 'read', scope = 'ask', touched = false;
 
-const logo = (name) => { const l = el('div', 'tp-logo', name.slice(0, 1).toUpperCase()); l.style.background = roleColor(name.toLowerCase()); return l; };
+// The little square for a tool: its real logo when there is one, a symbol for Colony's own tools, else the first letter.
+const GLYPHS = { read: '▤', write: '✎', bash: '›_', web: '⌕', new: '＋' };
+export function toolLogo(item) {
+  const tile = el('div', 'tp-logo');
+  if (GLYPHS[item.id]) { tile.classList.add('glyph'); tile.textContent = GLYPHS[item.id]; return tile; }
+  const letter = () => { tile.className = 'tp-logo'; tile.style.background = roleColor(item.name.toLowerCase()); tile.textContent = item.name.slice(0, 1).toUpperCase(); };
+  const slug = item.id === EVERY_APP ? 'composio' : item.id.startsWith('app:') && !item.custom ? logoSlug(item.name) : null;
+  if (!slug) { letter(); return tile; }
+  tile.classList.add('img');
+  const img = el('img'); img.alt = ''; img.loading = 'lazy'; img.src = `https://logos.composio.dev/api/${slug}`;
+  img.onerror = () => { img.remove(); letter(); };
+  tile.appendChild(img);
+  return tile;
+};
 
 function visible() {
   const q = query.trim().toLowerCase();
@@ -120,9 +136,10 @@ function visible() {
   return list;
 }
 
-function lockedFor(item) { return ctx.locked && item.kind !== 'web'; }
+function lockedFor(item) { return ctx.locked && item.kind !== 'web' && item.kind !== 'add'; }
 
 function statusOf(item) {
+  if (item.kind === 'add') return { text: 'Available', cls: '' };
   if (isOn(ctx.draft, item.id)) return { text: 'Connected', cls: 'on' };
   if (lockedFor(item)) return { text: "Model can't use tools", cls: 'warn' };
   if (item.kind === 'file' && !ctx.folder) return { text: 'Needs a project folder', cls: 'warn' };
@@ -155,7 +172,7 @@ function renderList() {
     const b = el('button', 'tp-item' + (item.id === selected ? ' sel' : '')); b.type = 'button';
     const text = el('div'), st = statusOf(item);
     text.append(el('div', 'tp-name', item.name), el('div', 'tp-blurb', item.blurb), el('div', `tp-status ${st.cls}`, st.text));
-    b.append(logo(item.name), text);
+    b.append(toolLogo(item), text);
     b.onclick = () => select(item.id);
     box.appendChild(b);
   });
@@ -190,10 +207,12 @@ function renderDetail() {
   const box = $('tpDetail'); box.innerHTML = '';
   const item = catalogue().find((i) => i.id === selected) || visible().find((i) => i.id === selected);
   if (!item) { $('tpGo').disabled = true; return; }
+  if (item.kind === 'add') { renderAddForm(box, item); return; }
+  $('tpGo').style.display = '';
   const info = describe(item), on = isOn(ctx.draft, item.id), st = statusOf(item);
   const head = el('div', 'tp-d-head'), title = el('div');
   title.append(el('h4', null, item.name), el('span', 'tp-badge ' + (on ? 'on' : st.cls), on ? 'Connected' : st.text));
-  head.append(logo(item.name), title); box.appendChild(head);
+  head.append(toolLogo(item), title); box.appendChild(head);
   box.append(el('div', 'tp-sec', 'This agent can'), bullets(info.can, 'ck'));
   box.append(el('div', 'tp-sec', 'Needs approval before'));
   box.appendChild(scope === 'ask' && info.ask.length ? bullets(info.ask, 'dot') : el('div', 'tp-note', info.ask.length ? 'Nothing: with “Allow freely” it acts without asking.' : 'Nothing. This one never asks.'));
@@ -211,10 +230,22 @@ function renderDetail() {
   if (item.kind === 'file' && !ctx.folder) box.appendChild(el('div', 'tp-note warn', 'This workspace has no project folder yet. Choose one (Workspace settings) before the agent can use it.'));
   if (lockedFor(item)) box.appendChild(el('div', 'tp-note warn', "This agent's model can't use tools (OpenRouter lists no tool support for it). Pick another model first."));
   if (item.kind === 'app' && !hasComposio()) box.appendChild(composioSetup());
+  if (on && ctx.standalone && item.kind === 'app' && item.id !== EVERY_APP) {
+    const signIn = el('button', 'btn small', `Sign in to ${item.name}`); signIn.type = 'button'; signIn.style.marginTop = '16px';
+    signIn.title = 'Puts a request in the chat; the agent answers with a sign-in link.';
+    signIn.onclick = () => { const id = ctx.roleId; closeToolPicker(); selectTarget(id); $('prompt').value = `Connect my ${item.name} account so you can use it.`; $('prompt').focus(); };
+    box.appendChild(signIn);
+  }
   if (on) {
-    const off = el('button', 'tp-link', `Disconnect ${item.name}`); off.type = 'button';
+    const off = el('button', 'tp-link', `Disconnect ${item.name} from ${ctx.agentName || 'this agent'}`); off.type = 'button';
     off.onclick = () => { ctx.draft = disconnect(ctx.draft, item.id); changed(`${item.name} disconnected`); };
     box.appendChild(off);
+  }
+  const removable = item.kind === 'server' ? item.id.slice(4) : item.id === EVERY_APP && hasComposio() ? 'composio' : null;
+  if (removable) {
+    const gone = el('button', 'tp-link', `Remove ${removable === 'composio' ? 'the Composio key' : item.name} from Colony`); gone.type = 'button';
+    gone.onclick = () => removeServer(removable);
+    box.appendChild(gone);
   }
   const go = $('tpGo');
   go.textContent = on ? 'Save changes' : 'Connect tool';
@@ -243,24 +274,111 @@ function changed(message) {
   renderList(); renderDetail();
 }
 
-export async function openToolPicker(options) {
-  ctx = { ...options, draft: JSON.parse(JSON.stringify(options.draft)) };
+// "KEY=value" lines for a program, "Header: value" lines for an address.
+function secretsFrom(text, isUrl) {
+  const out = {}, split = isUrl ? ':' : '=';
+  text.split('\n').map((l) => l.trim()).filter(Boolean).forEach((line) => {
+    const at = line.indexOf(split);
+    if (at > 0) out[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  });
+  return out;
+}
+
+async function putServers(next) {
+  servers = (await api('/mcp', { method: 'PUT', body: JSON.stringify({ servers: next }) })).servers;
+}
+
+async function removeServer(name) {
+  if (!confirm(`Remove ${name === 'composio' ? 'Composio' : name} from Colony? Agents will lose access to it.`)) return;
+  try {
+    const { [name]: _gone, ...rest } = servers;
+    await putServers(rest);
+    ctx.draft = disconnect(ctx.draft, name === 'composio' ? EVERY_APP : `srv:${name}`);
+    changed(`${name} removed`); select('read');
+  } catch (err) { toast(err.message); }
+}
+
+function renderAddForm(box) {
+  $('tpGo').style.display = 'none';
+  const head = el('div', 'tp-d-head'), title = el('div');
+  title.append(el('h4', null, 'Add a connector'), el('span', 'tp-badge', 'Any MCP server'));
+  head.append(toolLogo({ id: 'new', name: 'Add a connector' }), title); box.appendChild(head);
+  box.append(el('div', 'tp-sec', 'What it is'), el('div', 'tp-note', 'A connector is an MCP server: a program on this computer (for example npx -y some-mcp-server) or a web address (https://…). Once added, it appears in this list and you can connect it to an agent.'));
+  const field = (label, control) => { const w = el('div', 'tp-field'); w.append(el('label', null, label), control); return w; };
+  const name = el('input'), target = el('input'), secrets = el('textarea');
+  name.placeholder = 'e.g. github'; name.maxLength = 40;
+  target.placeholder = 'https://example.com/mcp   or   npx -y some-mcp-server'; target.autocomplete = 'off';
+  secrets.rows = 3; secrets.placeholder = 'Optional secrets, one per line.\nFor an address:  Authorization: Bearer …\nFor a command:  API_KEY=…';
+  box.append(field('Name', name), field('Address or command', target), field('Secrets', secrets));
+  const err = el('div', 'tp-note warn'), add = el('button', 'btn primary', 'Add connector'); add.type = 'button'; add.style.marginTop = '14px';
+  add.onclick = async () => {
+    const n = name.value.trim().toLowerCase(), t = target.value.trim();
+    if (!n || !t) { err.textContent = 'Give it a name and an address or command.'; return; }
+    const isUrl = t.startsWith('http://') || t.startsWith('https://'), extra = secretsFrom(secrets.value, isUrl);
+    const [command, ...args] = t.split(' ').filter(Boolean);
+    try { await putServers({ ...servers, [n]: isUrl ? { url: t, headers: extra } : { command, args, env: extra } }); changed(`${n} added`); select(`srv:${n}`); }
+    catch (e) { err.textContent = e.message; }
+  };
+  box.append(err, add);
+}
+
+function fillAgentPicker() {
+  const sel = $('tpAgentSel'); sel.innerHTML = '';
+  state.roles.forEach((r) => { const o = el('option', null, r.name); o.value = r.id; o.selected = r.id === ctx.roleId; sel.appendChild(o); });
+  $('tpAgentPick').style.display = ctx.standalone ? '' : 'none';
+  $('tpAgent').style.display = ctx.standalone ? 'none' : '';
+}
+
+function show(guard) {
   category = 'All'; query = ''; touched = false;
   $('tpSearch').value = '';
   $('tpSub').textContent = `Give ${ctx.agentName || 'this agent'} access to only what it needs.`;
   $('tpAgent').textContent = `Agent · ${ctx.agentName || 'New agent'}`;
-  $('tpGuard').textContent = 'Agents ask before editing, sending, deleting or sharing unless you choose “Allow freely”.';
-  $('tpCancel').textContent = 'Cancel';
-  await loadServers();
-  selected = options.select || 'read'; scope = 'ask';
+  $('tpGuard').textContent = guard || 'Agents ask before editing, sending, deleting or sharing unless you choose “Allow freely”.';
+  $('tpCancel').textContent = ctx.standalone ? 'Close' : 'Cancel';
+  fillAgentPicker();
+  selected = ctx.select || 'read'; scope = 'ask';
   renderPills(); select(selected);
   $('toolPicker').classList.add('open');
-  $('tpSearch').focus();
+}
+
+// Opened from the agent editor: edits the editor's draft; the editor saves it.
+export async function openToolPicker(options) {
+  ctx = { ...options, draft: JSON.parse(JSON.stringify(options.draft)) };
+  await loadServers();
+  show(); $('tpSearch').focus();
+}
+
+// Opened from the sidebar's Connectors button: works on an agent that already exists and saves right away.
+async function loadAgent(role) {
+  let locked = false;
+  try { locked = (await api(`/models/tools?model=${encodeURIComponent(role.model)}`)).supported === false; } catch { /* unknown: don't lock */ }
+  ctx = { standalone: true, roleId: role.id, agentName: role.name, draft: toolsFromRole(role), locked,
+    folder: (currentWorkspace() || {}).effective_folder, onChange: saveRole };
+}
+
+async function saveRole(draft) {
+  const next = state.roles.map((r) => (r.id === ctx.roleId ? { ...r, ...toolsForSave(draft) } : r));
+  try {
+    state.roles = (await api(`/roles?workspace_id=${encodeURIComponent(state.workspaceId)}`, { method: 'PUT', body: JSON.stringify({ roles: next }) })).roles;
+    renderSidebar();
+  } catch (err) { toast(err.message); }
+}
+
+export async function openConnectors() {
+  if (!state.roles.length) return;
+  await loadServers();
+  await loadAgent(state.roles.find((r) => r.id === state.target) || state.roles[0]);
+  show(); $('tpSearch').focus();
 }
 
 export function closeToolPicker() { $('toolPicker').classList.remove('open'); ctx = null; }
 
 export function initToolPicker() {
+  $('tpAgentSel').onchange = async () => {
+    const role = state.roles.find((r) => r.id === $('tpAgentSel').value);
+    if (role) { await loadAgent(role); show(); }
+  };
   $('tpSearch').addEventListener('input', () => { query = $('tpSearch').value; renderList(); const first = visible()[0]; if (first && query.trim()) select(first.id); });
   $('tpSearch').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeToolPicker(); } });
   ['tpCancel', 'tpClose', 'tpBack'].forEach((id) => { $(id).onclick = closeToolPicker; });

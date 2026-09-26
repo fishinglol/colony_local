@@ -15,5 +15,6 @@ class Link(BaseModel):
 def open_url(link: Link) -> dict:
     if not link.url.startswith(("https://", "http://")):
         raise HTTPException(status_code=400, detail="Only web addresses can be opened.")
-    webbrowser.open(link.url)
+    if not webbrowser.open(link.url):
+        raise HTTPException(status_code=500, detail="Couldn't open a browser on this computer.")
     return {"status": "ok"}

@@ -1,8 +1,8 @@
 // Entry point: wire the page's buttons to the modules, then load the initial data.
 import { deleteAgent, getModelField as getPickedModel, openAgentModal, openTools, saveAgent, setModel, testModel } from './agent-editor.js';
 import { initAttachments } from './attachments.js';
-import { initConnectors, openConnectors } from './connectors.js';
-import { initToolPicker } from './tool-picker.js';
+import { initLinks } from './links.js';
+import { initToolPicker, openConnectors } from './tool-picker.js';
 import { initContext } from './context.js';
 import { initModelPicker, openModelPicker } from './model-picker.js';
 import { initMode } from './mode.js';
@@ -42,7 +42,7 @@ document.addEventListener('click', (e) => { if (!e.target.closest('.menu') && !e
 (async function init() {
   initContext();
   initMode();
-  initConnectors();
+  initLinks();
   initToolPicker();
   initAttachments();
   initModelPicker();

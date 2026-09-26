@@ -144,7 +144,7 @@
   <div class="tp" role="dialog" aria-label="Connect a tool">
     <div class="tp-head">
       <button class="tp-icon" id="tpBack" type="button" title="Back">←</button>
-      <div class="tp-title"><h3>Connect a tool</h3><p id="tpSub"></p><span class="tp-agent" id="tpAgent"></span></div>
+      <div class="tp-title"><h3>Connect a tool</h3><p id="tpSub"></p><span class="tp-agent" id="tpAgent"></span><label class="tp-agent tp-agent-sel" id="tpAgentPick">Agent · <select id="tpAgentSel"></select></label></div>
       <button class="tp-icon" id="tpClose" type="button" title="Close">×</button>
     </div>
     <label class="tp-search"><input id="tpSearch" autocomplete="off" placeholder="Search tools and apps"><span>⌕</span></label>
@@ -157,34 +157,6 @@
       <span class="tp-guard"><i>⛨</i> <span id="tpGuard"></span></span>
       <div class="tp-actions"><button class="btn" id="tpCancel" type="button">Cancel</button><button class="btn tp-go" id="tpGo" type="button">Connect tool</button></div>
     </div>
-  </div>
-</div>
-
-<!-- Connectors (MCP servers) -->
-<div class="overlay" id="connectorsModal">
-  <div class="card wide">
-    <h3>Connectors</h3>
-    <p class="hint">Connectors let agents use your apps (Gmail, Notion, GitHub…) through MCP. Turn on <b>Use connected apps</b> in an agent's editor to let it use them; it asks you before every action unless you say otherwise. Keys are stored only on this machine.</p>
-    <div class="field" id="composioBox"></div>
-    <div class="field">
-      <label>Ask an agent to connect an app</label>
-      <div class="app-chips" id="appChips"></div>
-      <small>Click an app to put a request in the chat box. The first time an agent needs an app, it shows you a sign-in link.</small>
-    </div>
-    <div class="field">
-      <label>Your connectors</label>
-      <div id="connectorList"></div>
-      <details class="add-connector">
-        <summary>Add another connector</summary>
-        <div class="field"><label>Name</label><input id="cName" maxlength="40" placeholder="e.g. github"></div>
-        <div class="field"><label>Address or command</label><input id="cTarget" autocomplete="off" placeholder="https://example.com/mcp   or   npx -y some-mcp-server"></div>
-        <div class="field"><label>Secrets <span class="opt">optional, one per line</span></label>
-          <textarea id="cSecrets" rows="3" placeholder="For an address: Authorization: Bearer …&#10;For a command: API_KEY=…"></textarea></div>
-        <button class="btn" id="addConnectorBtn" type="button">Add</button>
-      </details>
-    </div>
-    <div class="form-error" id="connectorsError"></div>
-    <div class="actions"><div class="right"><button class="btn" data-close="connectorsModal">Close</button></div></div>
   </div>
 </div>
 
