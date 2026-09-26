@@ -22,15 +22,26 @@ function scrollDown() { const f = $('feed'); f.scrollTop = f.scrollHeight; }
 export function renderFeed() {
   const inner = $('feedInner'); inner.innerHTML = '';
   const channel = currentChannel();
-  const shown = state.messages.filter((m) => channelOf(m) === channel);
+  const shown = state.messages.map((m, i) => [m, i]).filter(([m]) => channelOf(m) === channel);
+  const cut = state.compaction ? state.messages.findIndex((m) => m.id === state.compaction.through_id) : -1;
   const waiting = state.pending && state.pending.channel === channel;
   if (!shown.length && !waiting) { showEmpty(); return; }
-  let lastQuestion = '', lastFiles = [];
-  shown.forEach((m) => {
+  let lastQuestion = '', lastFiles = [], marked = false;
+  shown.forEach(([m, i], n) => {
+    if (cut >= 0 && !marked && n > 0 && i > cut) { addSummaryNote(state.compaction.summary); marked = true; }
     if (m.role === 'user') { lastQuestion = m.content; lastFiles = m.attachments || []; addOwner(m.content, m.created_at, lastFiles); }
     else addAgent(m.content, m.metadata || {}, m.created_at, lastQuestion, lastFiles);
   });
   if (waiting) { addTyping(state.pending.roleId); state.approvals.forEach(addApproval); }
+}
+
+// Where the AIs' view of the conversation changes: everything above is now a summary for them (you still see it all).
+function addSummaryNote(summary) {
+  const wrap = el('div', 'summary-note'), btn = el('button', null, 'Messages above were summarised for the AIs · View summary');
+  const body = el('div', 'md summary-body'); body.innerHTML = renderMarkdown(summary); body.style.display = 'none';
+  btn.onclick = () => { body.style.display = body.style.display === 'none' ? '' : 'none'; };
+  wrap.append(btn, body);
+  $('feedInner').appendChild(wrap);
 }
 
 function showEmpty() {
@@ -109,7 +120,7 @@ function addTyping(roleId) {
 }
 
 // An agent with tools stops and asks before it writes a file or runs a command. Shown under its typing indicator.
-const WANTS = { write: 'create a file', edit: 'edit a file', bash: 'run a command' };
+const WANTS = { write: 'create a file', edit: 'edit a file', bash: 'run a command', mcp: 'use a connected app' };
 
 function addApproval(a) {
   const card = el('div', 'approval');

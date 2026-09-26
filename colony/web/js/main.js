@@ -1,6 +1,8 @@
 // Entry point: wire the page's buttons to the modules, then load the initial data.
-import { deleteAgent, getModelField as getPickedModel, openAgentModal, saveAgent, setModel, syncPerms, testModel } from './agent-editor.js';
+import { deleteAgent, getModelField as getPickedModel, openAgentModal, openTools, saveAgent, setModel, testModel } from './agent-editor.js';
 import { initAttachments } from './attachments.js';
+import { initConnectors, openConnectors } from './connectors.js';
+import { initToolPicker } from './tool-picker.js';
 import { initContext } from './context.js';
 import { initModelPicker, openModelPicker } from './model-picker.js';
 import { initMode } from './mode.js';
@@ -9,23 +11,24 @@ import { autosize, closeMenu, send } from './feed.js';
 import { openMemory, openSettings, refreshHealth, saveSettings } from './settings.js';
 import { selectTarget } from './sidebar.js';
 import { state } from './state.js';
-import { deleteWorkspace, loadWorkspaces, openFolderMenu, openWorkspace, openWorkspaceMenu, saveWorkspace } from './workspaces.js';
+import { browseFolder, deleteWorkspace, loadWorkspaces, openFolderMenu, openWorkspace, openWorkspaceMenu, saveWorkspace } from './workspaces.js';
 
 $('autoRow').onclick = () => selectTarget(null);
 $('wsBtn').onclick = (e) => openWorkspaceMenu(e.currentTarget);
 $('saveWorkspaceBtn').onclick = saveWorkspace;
+$('browseFolderBtn').onclick = browseFolder;
 $('deleteWorkspaceBtn').onclick = deleteWorkspace;
 $('addAgentBtn').onclick = () => openAgentModal('');
 $('editAgentBtn').onclick = () => openAgentModal(state.target);
 $('saveAgentBtn').onclick = saveAgent;
 $('modelBtn').onclick = () => openModelPicker(setModel, getPickedModel());
-$('fPermWrite').onchange = syncPerms;
-$('fPermBash').onchange = syncPerms;
+$('connectToolBtn').onclick = () => openTools();
 $('testModelBtn').onclick = testModel;
 $('deleteAgentBtn').onclick = deleteAgent;
 $('settingsBtn').onclick = openSettings;
 $('saveSettingsBtn').onclick = saveSettings;
 $('memoryBtn').onclick = openMemory;
+$('connectorsBtn').onclick = openConnectors;
 $('folderBtn').onclick = (e) => openFolderMenu(e.currentTarget);
 $('menuBtn').onclick = () => $('sidebar').classList.toggle('show');
 $('sendBtn').onclick = send;
@@ -39,6 +42,8 @@ document.addEventListener('click', (e) => { if (!e.target.closest('.menu') && !e
 (async function init() {
   initContext();
   initMode();
+  initConnectors();
+  initToolPicker();
   initAttachments();
   initModelPicker();
   await loadWorkspaces();

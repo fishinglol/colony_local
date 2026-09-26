@@ -33,12 +33,16 @@ _TEAM_NOTE = (
 )
 
 
+WEB_PLUGIN = {"id": "web", "max_results": 5}   # OpenRouter's web search: the results are put in front of any model
+
+
 @dataclass(frozen=True)
 class ProviderResult:
     text: str
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+    sources: tuple[tuple[str, str], ...] = ()    # (title, url) of the pages a web search used
 
 
 def _identity_system_message(model: str) -> dict:
@@ -60,14 +64,22 @@ def _role_system_message(role_name: str, instructions: str) -> dict:
 
 def system_messages(
     model: str, role_name: str, role_instructions: str,
-    memory_context: str | None, attributed_history: bool = False,
+    memory_context: str | None, attributed_history: bool = False, earlier_summary: str | None = None,
 ) -> list[dict]:
-    """Everything a model is told before the conversation starts (identity, role, team note, memory)."""
+    """Everything a model is told before the conversation starts (identity, role, team note, summary, memory)."""
     messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}, _identity_system_message(model)]
     if role_name:
         messages.append(_role_system_message(role_name, role_instructions))
     if attributed_history:
         messages.append({"role": "system", "content": _TEAM_NOTE})
+    if earlier_summary:
+        messages.append({
+            "role": "system",
+            "content": (
+                "This conversation began before the messages below. The older messages were replaced by this summary "
+                f"(written by an assistant; the newest messages are exact):\n{earlier_summary}"
+            ),
+        })
     if memory_context:
         messages.append({
             "role": "system",
@@ -82,10 +94,10 @@ def system_messages(
 def build_messages(
     model: str, message: str | list[dict], role_name: str, role_instructions: str,
     memory_context: str | None, history: list[dict] | None,
-    attributed_history: bool = False,
+    attributed_history: bool = False, earlier_summary: str | None = None,
 ) -> list[dict]:
     """The exact message list sent to a model. Also used to measure how full its context is."""
-    messages = system_messages(model, role_name, role_instructions, memory_context, attributed_history)
+    messages = system_messages(model, role_name, role_instructions, memory_context, attributed_history, earlier_summary)
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": message})
@@ -115,9 +127,24 @@ def _extract_text(data: dict, provider_name: str) -> str:
         raise ProviderError(f"Unexpected {provider_name} response shape: {exc}. Keys: {keys}") from exc
 
 
+def _sources(data: dict) -> tuple[tuple[str, str], ...]:
+    """The pages OpenRouter's web search cited (message.annotations of type url_citation), without repeats."""
+    try:
+        notes = data["choices"][0]["message"].get("annotations") or []
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return ()
+    seen: dict[str, str] = {}
+    for note in notes:
+        cite = note.get("url_citation") if isinstance(note, dict) and note.get("type") == "url_citation" else None
+        if isinstance(cite, dict) and isinstance(cite.get("url"), str) and cite["url"] not in seen:
+            seen[cite["url"]] = str(cite.get("title") or cite["url"])
+    return tuple((title, url) for url, title in seen.items())
+
+
 def _result(data: dict, text: str, model: str) -> ProviderResult:
     usage = data.get("usage") or {}
     return ProviderResult(
+        sources=_sources(data),
         text=text or "I could not generate a response.",
         model=data.get("model") or model,
         input_tokens=usage.get("prompt_tokens") if isinstance(usage.get("prompt_tokens"), int) else None,
@@ -132,7 +159,9 @@ def generate_openrouter_reply(
     memory_context: str | None = None,
     history: list[dict] | None = None,
     attributed_history: bool = False,
+    earlier_summary: str | None = None,
     reasoning: dict | None = None,     # OpenRouter's `reasoning` field; None = the model's own default
+    web_search: bool = False,          # let OpenRouter search the web for this request
 ) -> ProviderResult:
     if not settings.openrouter_api_key:
         raise ProviderError("OPENROUTER_API_KEY is not configured.")
@@ -140,13 +169,15 @@ def generate_openrouter_reply(
     model = model_hint if "/" in model_hint else settings.openrouter_default_model
     payload: dict = {
         "model": model,
-        "messages": build_messages(model, message, role_name, role_instructions, memory_context, history, attributed_history),
+        "messages": build_messages(model, message, role_name, role_instructions, memory_context, history, attributed_history, earlier_summary),
         "max_tokens": settings.max_output_tokens,
     }
     if accepts_temperature(model):
         payload["temperature"] = 0.7
     if reasoning:
         payload["reasoning"] = reasoning
+    if web_search:
+        payload["plugins"] = [WEB_PLUGIN]
 
     data = post_json(
         f"{OPENROUTER_BASE}/chat/completions", payload, openrouter_headers(settings),
@@ -182,6 +213,7 @@ def generate_openai_reply(
     memory_context: str | None = None,
     history: list[dict] | None = None,
     attributed_history: bool = False,
+    earlier_summary: str | None = None,
 ) -> ProviderResult:
     """OpenAI fallback — only used when openrouter_api_key is absent."""
     if not settings.openai_api_key:
@@ -190,7 +222,7 @@ def generate_openai_reply(
     model = settings.openai_default_model
     payload = {
         "model": model,
-        "messages": build_messages(model, message, role_name, role_instructions, memory_context, history, attributed_history),
+        "messages": build_messages(model, message, role_name, role_instructions, memory_context, history, attributed_history, earlier_summary),
         "max_tokens": settings.max_output_tokens,
     }
     data = post_json(

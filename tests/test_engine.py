@@ -97,7 +97,7 @@ def test_pi_is_started_locked_down_and_gets_no_secrets(settings, tmp_path):
     assert "--thinking" not in argv                                                    # the model's own reasoning unless the agent picks one
     assert argv[argv.index("-e") + 1].endswith("colony-gate.ts")
     assert (agent_dir / "system-prompt.md").read_text() == "You are Coder."
-    assert json.loads(ran["policy"]) == {"write": "ask", "edit": "ask", "bash": "off"}
+    assert json.loads(ran["policy"]) == {"write": "ask", "edit": "ask", "bash": "off", "mcp": "off"}
     assert ran["cwd"] == str((tmp_path / "ws").resolve())
     # the key lives in a private file for Pi, not in its environment (a bash tool could print the environment)
     assert not any("KEY" in name for name in ran["env"])

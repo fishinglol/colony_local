@@ -7,6 +7,7 @@ import { refreshContext } from './context.js';
 import { $, closeModal, el, openModal, toast } from './dom.js';
 import { renderFeed } from './feed.js';
 import { renderSidebar } from './sidebar.js';
+import { disconnect, emptyTools, loadServers, openToolPicker, toolRows, toolsForSave, toolsFromRole } from './tool-picker.js';
 import { currentWorkspace, state } from './state.js';
 
 // Starting points for "Add agent". Everything is editable after picking one.
@@ -28,7 +29,6 @@ const PRESETS = [
     instructions: 'Be friendly and brief.' },
 ];
 const DEFAULT_MODEL = 'qwen/qwen3.8-27b:free';
-const PERMS = ['fPermRead', 'fPermWrite', 'fPermBash', 'fPermAsk'];
 
 // The model is chosen in the picker window (model-picker.js); this keeps the chosen id and the button that shows it.
 let pickedModel = DEFAULT_MODEL;
@@ -73,14 +73,33 @@ function showModelIcon() {
   icon.style.background = roleColor(maker);
 }
 
-// Tool switches follow what the chosen model can do: OpenRouter says which models can call tools.
+// The agent's tools are edited in the "Connect a tool" window (tool-picker.js); the editor keeps the draft and lists what is on.
+let toolDraft = emptyTools();
+let toolsLocked = false;      // the chosen model can't use tools (OpenRouter's catalog says so)
 let toolCheck = 0;
-// "Request approvals" only means something once the agent may change files or run commands.
-export function syncPerms() {
-  const acts = $('fPermWrite').checked || $('fPermBash').checked;
-  const locked = $('fPermRead').disabled;
-  $('fPermAsk').disabled = locked || !acts;
-  $('fPermAsk').closest('.perm').classList.toggle('dim', !acts);
+
+function renderToolRows() {
+  const box = $('toolRows'); box.innerHTML = '';
+  const rows = toolRows(toolDraft);
+  if (!rows.length) box.appendChild(el('small', null, 'No tools yet. This agent only chats.'));
+  rows.forEach((r) => {
+    const row = el('div', 'tool-row'), logo = el('div', 'tp-logo', r.name.slice(0, 1).toUpperCase()), main = el('div', 'tr-main');
+    logo.style.background = roleColor(r.name.toLowerCase());
+    main.append(el('div', 'tr-name', r.name), el('div', 'tr-scope', r.scope));
+    const x = el('button', 'tr-x', '×'); x.type = 'button'; x.title = 'Disconnect';
+    x.onclick = (e) => { e.stopPropagation(); toolDraft = disconnect(toolDraft, r.id); renderToolRows(); };
+    row.append(logo, main, x);
+    row.onclick = () => openTools(r.id);
+    box.appendChild(row);
+  });
+}
+
+export function openTools(select) {
+  openToolPicker({
+    draft: toolDraft, select, locked: toolsLocked, agentName: $('fName').value.trim(),
+    folder: (currentWorkspace() || {}).effective_folder,
+    onChange: (d) => { toolDraft = d; renderToolRows(); },
+  });
 }
 
 async function syncToolLock() {
@@ -90,17 +109,15 @@ async function syncToolLock() {
     try { supported = (await api(`/models/tools?model=${encodeURIComponent(model)}`)).supported; } catch { /* unknown: don't lock */ }
   }
   if (ticket !== toolCheck) return;   // another model was picked while we asked
-  const locked = supported === false;
-  PERMS.forEach((id) => { $(id).disabled = locked; if (locked) $(id).checked = false; });
-  if (!locked) syncPerms();
-  const t = state.tools || {};
-  const notes = [];
-  if (locked) notes.push("This model can't use tools (OpenRouter lists no tool support for it). Pick another model to switch them on.");
+  toolsLocked = supported === false;
+  if (toolsLocked) toolDraft = { ...emptyTools(), web_search: toolDraft.web_search };
+  renderToolRows();
+  const t = state.tools || {}, notes = [];
+  if (toolsLocked) notes.push("This model can't use tools (OpenRouter lists no tool support for it), so only web search is available. Pick another model to connect more.");
   else {
     const folder = (currentWorkspace() || {}).effective_folder;
-    notes.push(folder ? `Works only inside ${folder}.` : 'Set a Project folder in Workspace settings (top of the sidebar) before using tools.');
+    notes.push(folder ? `File tools work only inside ${folder}.` : 'File tools and commands need a Project folder (Workspace settings, top of the sidebar). Apps and web search do not.');
     if (t.pi_installed === false) notes.push('The Pi engine is not installed yet (npm install in local/pi-runtime).');
-    notes.push('With "Request approvals" on, you say yes or no before each file change or command. "Run commands" can do anything your account can, so keep approvals on unless you fully trust this agent.');
   }
   $('toolsNote').textContent = notes.join(' ');
 }
@@ -118,14 +135,10 @@ export async function testModel() {
 }
 
 function fillAgentForm(r) {
+  toolDraft = toolsFromRole(r);            // before the model is set: that check may take tools away
   $('fName').value = r.name; pickedReasoning = r.reasoning || 'default'; setModel(r.model); $('fWhen').value = r.when; $('fInstructions').value = r.instructions;
-  const t = r.tools || {};
-  const acts = [t.write, t.bash].filter((x) => x && x !== 'off');
-  $('fPermRead').checked = t.read === 'allow';
-  $('fPermWrite').checked = !!t.write && t.write !== 'off';
-  $('fPermBash').checked = !!t.bash && t.bash !== 'off';
-  $('fPermAsk').checked = !acts.length || acts.includes('ask');   // approvals on unless every action is set to run freely
-  syncPerms();
+  renderToolRows();
+  loadServers().then(renderToolRows);      // an agent with "every connector" needs the connector list to show its rows
 }
 
 export function openAgentModal(id) {
@@ -170,11 +183,7 @@ export async function saveAgent() {
     name: $('fName').value.trim(), model: getModelField(),
     reasoning: reasoningOptions(pickedModel).length || !state.modelPool.length ? pickedReasoning : 'default',
     when: $('fWhen').value.trim(), instructions: $('fInstructions').value.trim(),
-    tools: {
-      read: $('fPermRead').checked ? 'allow' : 'off',
-      write: $('fPermWrite').checked ? ($('fPermAsk').checked ? 'ask' : 'allow') : 'off',
-      bash: $('fPermBash').checked ? ($('fPermAsk').checked ? 'ask' : 'allow') : 'off',
-    },
+    ...toolsForSave(toolDraft),
   };
   if (!draft.name || !draft.model || !draft.when) { $('agentError').textContent = 'Name, model and "when" are required.'; return; }
   let next;

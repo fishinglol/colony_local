@@ -35,7 +35,7 @@ def live(monkeypatch, tmp_path, workspace=True):
 def test_tool_access_translates_to_pi_tools_and_rules():
     access = ToolAccess(read="allow", write="ask", bash="off")
     assert access.pi_tools() == ["read", "grep", "find", "ls", "write", "edit"]
-    assert access.policy() == {"write": "ask", "edit": "ask", "bash": "off"}
+    assert access.policy() == {"write": "ask", "edit": "ask", "bash": "off", "mcp": "off"}
     assert not ToolAccess().any_on and ToolAccess(bash="ask").any_on
 
 

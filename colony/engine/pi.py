@@ -23,7 +23,10 @@ from ..core.agents import ToolAccess
 from ..llm.http import ProviderError
 
 GATE = Path(__file__).with_name("colony-gate.ts")
-RUNTIME_PI = Path(__file__).resolve().parents[2] / "pi-runtime" / "node_modules" / ".bin" / "pi"
+RUNTIME_DIR = Path(__file__).resolve().parents[2] / "pi-runtime"
+RUNTIME_PI = RUNTIME_DIR / "node_modules" / ".bin" / "pi"
+MCP_EXTENSION = RUNTIME_DIR / "colony-mcp.ts"
+MCP_ADAPTER = RUNTIME_DIR / "node_modules" / "pi-mcp-adapter" / "index.ts"
 PROVIDER = "colony"
 # Pi's tools run with what we pass here; nothing else from our environment (API keys!) is handed over.
 _ENV_PASSTHROUGH = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SHELL")
@@ -32,6 +35,12 @@ TOOLS_NOTE = (
     "You can work on files in the user's workspace folder with the tools you were given. Stay inside that folder. "
     "Some actions need the user's approval and may be refused; if one is, say what you wanted to do and carry on "
     "without it. When you are done, say briefly what you did and where."
+)
+
+MCP_NOTE = (
+    "You can use the user's connected apps through the `mcp` tool: search for a tool (`search`), look at its parameters "
+    "(`describe`), then call it (`tool` + `args`). Each call may need the user's approval and may be refused; if one is, say what "
+    "you wanted to do and carry on. You cannot add, install or sign in to connectors; the user does that in Colony's settings."
 )
 
 # (tool, what it wants to do) -> allowed?
@@ -97,6 +106,8 @@ def _summarize(tool: str, args: dict) -> str:
     if tool == "bash":
         command = str(args.get("command") or "")
         return f"ran `{command[:60]}{'…' if len(command) > 60 else ''}`"
+    if tool == "mcp":
+        return f"used connector {args.get('tool')}" if args.get("tool") else "looked through the connectors"
     return f"{tool} {path}".strip()
 
 
@@ -124,6 +135,7 @@ def _tail(process: subprocess.Popen) -> str:
 def run_turn(
     *, settings: Settings, model: str, system_prompt: str, prompt: str, workspace: Path,
     tools: ToolAccess, approve: Approver, thinking: str | None = None, images: list[dict] | None = None,
+    mcp_servers: dict[str, dict] | None = None,
 ) -> PiResult:
     """Let `model` work on `prompt` in `workspace` with the tools `tools` allows. Blocks until it is done.
     Raises EngineError (engine problem), ProviderError (the model call failed)."""
@@ -140,6 +152,12 @@ def run_turn(
         "models": [{"id": model, **_thinking_config(thinking)}],
     }}}))
     _write_private(agent_dir / "system-prompt.md", system_prompt)
+    use_mcp = tools.mcp != "off" and bool(mcp_servers)
+    if use_mcp:
+        if not (MCP_EXTENSION.exists() and MCP_ADAPTER.exists()):
+            raise EngineError("ยังไม่ได้ติดตั้งตัวเชื่อม MCP รัน `npm install` ในโฟลเดอร์ `local/pi-runtime` ก่อน แล้วลองใหม่")
+        _write_private(agent_dir / "mcp-turn.json", json.dumps({"mcpServers": mcp_servers}))
+    tools = tools if use_mcp or tools.mcp == "off" else tools.model_copy(update={"mcp": "off"})   # no servers = no connector tool
 
     command = [
         pi, "--mode", "rpc", "--no-session", "--provider", PROVIDER, "--model", model,
@@ -147,6 +165,7 @@ def run_turn(
         # Nothing but what Colony hands over: no CLAUDE.md, skills, extensions or settings from the workspace.
         "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-extensions", "--no-approve",
         "-e", str(GATE),
+        *(["-e", str(MCP_EXTENSION)] if use_mcp else []),
     ]
     if thinking:                      # off | minimal | low | medium | high | xhigh | max (None = the model's own default)
         command += ["--thinking", thinking]
@@ -154,6 +173,7 @@ def run_turn(
     env.update({
         "PI_CODING_AGENT_DIR": str(agent_dir), "PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
         "COLONY_POLICY": json.dumps(tools.policy()),
+        **({"COLONY_MCP_FILE": str(agent_dir / "mcp-turn.json")} if use_mcp else {}),
         "COLONY_APPROVAL_TIMEOUT_MS": str(int(settings.approval_timeout_seconds * 1000) + 5000),
     })
     try:

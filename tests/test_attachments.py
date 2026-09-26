@@ -179,3 +179,12 @@ def test_the_mode_belongs_to_the_workspace_and_reaches_the_tools_engine(monkeypa
     client.patch("/api/workspaces/local", json={"mode": "bypass"})
     client.post("/api/messages", json={"message": "go"})
     assert runs[1][0] == ToolAccess(read="allow", write="allow", bash="allow") and "PLAN MODE" not in runs[1][1]
+
+
+def test_without_a_project_folder_tool_agents_are_chat_only_so_they_can_read_a_pdf(monkeypatch):
+    sent = live(monkeypatch, "acme/vision")
+    client.put("/api/roles", json={"roles": [{"id": "vision", "name": "Vision", "model": "acme/vision", "when": "x", "tools": {"read": "allow"}}]})
+    monkeypatch.setattr(chat, "run_turn", lambda **kw: (_ for _ in ()).throw(AssertionError("Pi must not start without a folder")))
+    pdf = upload("doc.pdf", b"%PDF-1.4").json()
+    reply = client.post("/api/messages", json={"message": "read", "attachments": [pdf["id"]]}).json()
+    assert reply["reply"] == "ok" and sent[0]["messages"][-1]["content"][1]["type"] == "file"

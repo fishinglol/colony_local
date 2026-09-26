@@ -9,6 +9,7 @@ A role is one "AI teammate" the user sets up in the UI:
                   (sent to the model as a system message)
   - tools:        what the role may do to files on this computer (nothing by default)
   - reasoning:    how hard the model thinks: "default" (the model's own setting) or a level the model supports
+  - web_search:   may search the web
 
 Roles belong to a workspace (see core/workspaces.py).
 """
@@ -24,19 +25,23 @@ class ToolAccess(BaseModel):
     read: Literal["off", "allow"] = "off"
     write: Literal["off", "ask", "allow"] = "off"   # create and edit files
     bash: Literal["off", "ask", "allow"] = "off"    # run commands
+    mcp: Literal["off", "ask", "allow"] = "off"     # use the connectors (MCP servers) set up in Connectors
+    mcp_servers: list[str] | None = None            # which connectors; None = every enabled one
+    mcp_apps: list[str] = Field(default_factory=list, max_length=60)   # apps the agent is told to stay within (Composio); [] = any
 
     @property
     def any_on(self) -> bool:
-        return self.read != "off" or self.write != "off" or self.bash != "off"
+        return self.read != "off" or self.write != "off" or self.bash != "off" or self.mcp != "off"
 
     def pi_tools(self) -> list[str]:
         """Pi's tool names for what is switched on."""
         return (["read", "grep", "find", "ls"] if self.read != "off" else []) \
-            + (["write", "edit"] if self.write != "off" else []) + (["bash"] if self.bash != "off" else [])
+            + (["write", "edit"] if self.write != "off" else []) + (["bash"] if self.bash != "off" else []) \
+            + (["mcp"] if self.mcp != "off" else [])
 
     def policy(self) -> dict[str, str]:
         """Per-tool rule for the approval gate. Reading needs no approval."""
-        return {"write": self.write, "edit": self.write, "bash": self.bash}
+        return {"write": self.write, "edit": self.write, "bash": self.bash, "mcp": self.mcp}
 
 
 # How much freedom the workspace's agents get to change things, whatever each agent is set to (see apply_mode).
@@ -51,14 +56,16 @@ PLAN_NOTE = (
 def apply_mode(tools: ToolAccess, mode: Mode) -> ToolAccess:
     """What an agent may do under the workspace's mode. A mode never switches on a tool the agent doesn't have.
     auto = the agent's own settings; manual = ask before every change; accept_edits = file edits go through,
-    commands still ask; plan = read only; bypass = everything the agent has goes through without asking."""
+    commands and connectors still ask; plan = read only; bypass = everything the agent has goes through without asking."""
     if mode == "auto" or not tools.any_on:
         return tools
     if mode == "plan":
-        return ToolAccess(read="allow", write="off", bash="off")
-    ruled = {"manual": ("ask", "ask"), "accept_edits": ("allow", "ask"), "bypass": ("allow", "allow")}[mode]
-    return ToolAccess(read=tools.read, write=ruled[0] if tools.write != "off" else "off",
-                      bash=ruled[1] if tools.bash != "off" else "off")
+        return ToolAccess(read="allow", write="off", bash="off", mcp="off")
+    ruled = {"manual": ("ask", "ask", "ask"), "accept_edits": ("allow", "ask", "ask"), "bypass": ("allow", "allow", "allow")}[mode]
+    return tools.model_copy(update={
+        "write": ruled[0] if tools.write != "off" else "off",
+        "bash": ruled[1] if tools.bash != "off" else "off",
+        "mcp": ruled[2] if tools.mcp != "off" else "off"})
 
 
 ReasoningLevel = Literal["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -72,6 +79,7 @@ class Role(BaseModel):
     instructions: str = Field(default="", max_length=2000)
     tools: ToolAccess = Field(default_factory=ToolAccess)
     reasoning: ReasoningLevel = "default"
+    web_search: bool = False     # let the model search the web (OpenRouter's web plugin; costs a little per search)
 
     @field_validator("model")
     @classmethod

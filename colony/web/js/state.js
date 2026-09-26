@@ -4,6 +4,7 @@ export const state = {
   target: null,         // null = #auto (Jev picks); otherwise an agent id
   workspaces: [],       // every workspace (from /api/workspaces)
   workspaceId: null,    // the open workspace; its team is `roles`, its one conversation is `messages`
+  compaction: null,     // {summary, through_id, created_at}: the older part of the conversation, summarised for the AIs
   messages: [],         // every message of the open workspace, all rooms (mix chat + direct chats)
   pending: null,        // {channel, roleId} while a reply is on its way
   editingId: null,      // agent id being edited; '' = a new agent

@@ -30,5 +30,6 @@ export function describeTools(t) {
   if (t.read === 'allow') on.push('read files');
   if (t.write && t.write !== 'off') on.push(t.write === 'ask' ? 'edit files (asks you)' : 'edit files');
   if (t.bash && t.bash !== 'off') on.push(t.bash === 'ask' ? 'run commands (asks you)' : 'run commands');
+  if (t.mcp && t.mcp !== 'off') on.push(t.mcp === 'ask' ? 'use connected apps (asks you)' : 'use connected apps');
   return on.join(', ');
 }

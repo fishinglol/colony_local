@@ -15,8 +15,7 @@ from .. import memory
 from ..config import Settings
 from ..llm.http import ProviderError, get_json
 from ..llm.providers import OPENROUTER_BASE, build_messages
-from ..store.history import get_prompt_messages
-from . import attachments
+from . import attachments, compaction
 from .agents import Role
 from .models import known_context_window
 
@@ -175,7 +174,8 @@ class Sight:
 
 def plan_history(*, model: str, role: Role, settings: Settings, memory_context: str | None,
                  messages: list[dict], next_message: str = "", workspace_id: str = "",
-                 with_tools: bool = False, next_media: int = 0) -> HistoryPlan:
+                 with_tools: bool = False, next_media: int = 0,
+                 earlier_summary: str | None = None) -> HistoryPlan:
     usable = [m for m in messages if m.get("content")]
     limit = settings.history_max_messages
     recent = usable[-limit:] if limit > 0 else usable
@@ -187,7 +187,7 @@ def plan_history(*, model: str, role: Role, settings: Settings, memory_context: 
     pairs = [_labelled(m, seen) for m in recent]
 
     def build(history: list[dict], attributed: bool) -> list[dict]:
-        return build_messages(model, next_message, role.name, role.instructions, memory_context, history, attributed)
+        return build_messages(model, next_message, role.name, role.instructions, memory_context, history, attributed, earlier_summary)
 
     def size(history: list[dict], attributed: bool) -> int:
         return sum(estimate_tokens(m["content"]) for m in build(history, attributed)) \
@@ -213,13 +213,13 @@ def strip_self_label(reply: str, role_name: str) -> str:
 
 def report(workspace_id: str, roles: list[Role], settings: Settings) -> list[dict]:
     """How full each agent's context window would be if it were asked something now."""
-    messages = get_prompt_messages(workspace_id, limit=10_000)
+    summary, messages = compaction.view(workspace_id)
     last_question = next((m["content"] for m in reversed(messages) if m["role"] == "user"), None)
     memory_context = memory.learned_context(workspace_id, query=last_question)
     rows = []
     for role in roles:
         plan = plan_history(model=role.model, role=role, settings=settings, memory_context=memory_context,
-                            messages=messages, workspace_id=workspace_id)
+                            messages=messages, workspace_id=workspace_id, earlier_summary=summary)
         rows.append({
             "role_id": role.id, "name": role.name, "model": role.model,
             "window": plan.window, "used_tokens": plan.tokens,

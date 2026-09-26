@@ -113,6 +113,24 @@ def count_user_messages(conversation_id: str) -> int:
     return sum(1 for m in get_all_messages(conversation_id) if m.get("role") == "user")
 
 
+def get_compaction(conversation_id: str) -> dict[str, Any] | None:
+    """{summary, through_id, created_at}: the summary of the older messages and the last message it covers."""
+    for c in _store().read().get("conversations", []):
+        if c.get("id") == conversation_id:
+            return c.get("compaction")
+    return None
+
+
+def set_compaction(conversation_id: str, summary: str, through_id: str) -> None:
+    store = _store()
+    data = store.read()
+    for c in data.get("conversations", []):
+        if c.get("id") == conversation_id:
+            c["compaction"] = {"summary": summary, "through_id": through_id, "created_at": datetime.now(timezone.utc).isoformat()}
+            store.write(data)
+            return
+
+
 def get_topic_summary(conversation_id: str) -> str | None:
     data = _store().read()
     for c in data.get("conversations", []):

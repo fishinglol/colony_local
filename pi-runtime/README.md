@@ -12,3 +12,6 @@ cd local/pi-runtime && npm install     # once
 
 How agents use it, what is locked down, and what was verified: `local/spike-pi/README.md` (the experiment) and
 `colony/engine/colony-gate.ts` (the approval gate + workspace fence).
+
+It also holds `pi-mcp-adapter` (MIT), which lets an agent use MCP servers ("connectors"). Colony never lets the adapter read its usual
+config files: `colony-mcp.ts` hands it exactly the servers Colony wrote for that turn (see `local/colony/core/mcp.py`).

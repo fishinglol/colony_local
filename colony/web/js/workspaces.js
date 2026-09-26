@@ -22,7 +22,7 @@ export async function openWorkspace(id) {
   const ws = state.workspaces.find((w) => w.id === (id || remembered())) || state.workspaces[0];
   const [roles, messages] = await Promise.all([api(`/roles?workspace_id=${ws.id}`), api(`/workspaces/${ws.id}/messages`)]);
   state.workspaceId = ws.id; remember(ws.id);
-  state.roles = roles.roles; state.messages = messages.messages;
+  state.roles = roles.roles; state.messages = messages.messages; state.compaction = messages.compaction;
   state.target = null; state.approvals = [];
   $('sidebar').classList.remove('show');
   renderSidebar(); renderFeed(); refreshContext();
@@ -97,12 +97,31 @@ export function openFolderMenu(anchor) {
   menu.style.top = (box.top - menu.offsetHeight - 8) + 'px';
 }
 
-async function pickFolder(ws) {
+// The system's own folder window (macOS Finder-style), through the desktop app. null = cancelled, or not in the app.
+async function chooseFolder(current) {
   const dialog = window.__TAURI__ && window.__TAURI__.dialog;
-  if (!dialog) { openWorkspaceModal(true, true); return; }
+  if (!dialog) return undefined;
+  const folder = await dialog.open({ directory: true, multiple: false, title: 'Choose project folder', ...(current ? { defaultPath: current } : {}) });
+  return !folder || Array.isArray(folder) ? null : folder;
+}
+
+// "Browse…" next to the Project folder box in the workspace window.
+export async function browseFolder() {
   try {
-    const folder = await dialog.open({ directory: true, multiple: false, title: 'Choose project folder' });
-    if (!folder || Array.isArray(folder)) return;
+    const folder = await chooseFolder($('fWsFolder').value.trim());
+    if (folder === undefined) { $('workspaceError').textContent = 'The folder window is part of the Colony desktop app. Here, paste the folder path instead.'; return; }
+    if (folder === null) return;
+    $('workspaceError').textContent = '';
+    $('fWsFolder').value = folder;
+    if (!editing && !$('fWsName').value.trim()) $('fWsName').value = folder.split('/').filter(Boolean).pop() || '';   // name a new project after its folder
+  } catch (err) { $('workspaceError').textContent = err.message || 'Could not open the folder picker.'; }
+}
+
+async function pickFolder(ws) {
+  try {
+    const folder = await chooseFolder(ws.effective_folder);
+    if (folder === undefined) { openWorkspaceModal(true, true); return; }   // not in the desktop app: type the path
+    if (folder === null) return;
     await api(`/workspaces/${ws.id}`, { method: 'PATCH', body: JSON.stringify({ folder }) });
     await loadWorkspaces(); renderSidebar();
     toast('Project folder selected');

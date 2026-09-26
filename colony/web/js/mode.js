@@ -23,10 +23,9 @@ export function renderMode() {
   $('folderName').textContent = name;
   folderBtn.className = 'folder-btn ' + (folder ? 'ready' : 'missing');
   folderBtn.title = folder ? `${folder}\nChange project folder` : 'Choose a project folder to enable tools in this workspace';
-  $('modeName').textContent = folder ? mode.name : 'Chat only';
-  $('modeBtn').className = 'mode-btn' + (!folder ? ' chat-only' : mode.id === 'plan' ? ' plan' : mode.id === 'bypass' ? ' bypass' : '');
-  $('modeBtn').disabled = !folder;
-  $('modeBtn').title = folder ? 'How freely agents with tools may change things' : 'Choose a project folder to enable tools';
+  $('modeName').textContent = mode.name;
+  $('modeBtn').className = 'mode-btn' + (mode.id === 'plan' ? ' plan' : mode.id === 'bypass' ? ' bypass' : '');
+  $('modeBtn').title = 'How freely agents with tools may change things';
 }
 
 async function setMode(id) {
@@ -52,7 +51,10 @@ export function openModeMenu(anchor) {
     b.onclick = () => { closeMenu(); setMode(m.id); };
     menu.appendChild(b);
   });
-  menu.appendChild(el('div', 'menu-note', 'Applies to agents that have tools. Agents without tools just chat.'));
+  const ws = currentWorkspace();
+  menu.appendChild(el('div', 'menu-note', ws && ws.effective_folder
+    ? 'Applies to agents that have tools. Agents without tools just chat.'
+    : 'Agents can only use tools once this workspace has a project folder. Until then everyone just chats.'));
   document.body.appendChild(menu);
   const box = anchor.getBoundingClientRect();
   menu.style.left = box.left + 'px'; menu.style.top = (box.top - menu.offsetHeight - 8) + 'px';

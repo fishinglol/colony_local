@@ -8,7 +8,11 @@
  * Whatever the policy, file tools are blocked from paths outside the workspace folder (the folder Pi runs in).
  * bash can't be fenced this way: it can do anything the user's account can, so "allow" for bash is a big trust.
  *
- * The approval question's `title` is the tool name (write, edit, bash); `message` says what it wants to do.
+ * The approval question's `title` is the tool name (write, edit, bash, mcp); `message` says what it wants to do.
+ *
+ * Connectors (pi-mcp-adapter's single `mcp` tool): looking around (search, describe, connect) is allowed whenever the
+ * agent may use connectors at all; only actually CALLING a connector's tool asks. Anything that would change the
+ * connector setup itself (install, auth, a url) is refused: the list of connectors is Colony's, not the agent's.
  */
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -25,6 +29,10 @@ function escapesWorkspace(workspace: string, path: unknown): boolean {
 
 function describe(tool: string, input: Record<string, unknown>): string {
   const path = String(input.path ?? input.file_path ?? "");
+  if (tool === "mcp") {
+    const args = typeof input.args === "string" ? input.args : JSON.stringify(input.args ?? {});
+    return `Use connector tool ${String(input.tool)}${input.server ? ` (server ${String(input.server)})` : ""}:\n${args.slice(0, SHOWN)}`;
+  }
   if (tool === "bash") return `Run this command:\n${String(input.command).slice(0, SHOWN)}`;
   if (tool === "write") return `Write ${path}:\n${String(input.content ?? "").slice(0, SHOWN)}`;
   if (tool === "edit" && Array.isArray(input.edits)) {
@@ -47,6 +55,13 @@ export default function (pi: ExtensionAPI) {
     }
     if (READ_ONLY.includes(event.toolName)) return undefined;
     const rule = policy[event.toolName] ?? "ask";
+    if (event.toolName === "mcp") {
+      if (rule === "off") return { block: true, reason: "Connectors are not allowed for this agent." };
+      if (input.action !== undefined || input.url !== undefined) {
+        return { block: true, reason: "Connectors are set up by the user in Colony's settings; an agent can't install or sign in to them." };
+      }
+      if (input.tool === undefined) return undefined;   // search / describe / connect: only looks
+    }
     if (rule === "allow") return undefined;
     if (rule === "off") return { block: true, reason: `The ${event.toolName} tool is not allowed for this agent.` };
     if (!ctx.hasUI) return { block: true, reason: "Needs approval but nobody is there to give it." };

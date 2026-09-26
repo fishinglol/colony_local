@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Primary: OpenRouter. Fallback: OpenAI. Same convention as Colony backend.
     openrouter_api_key: str | None = None
     openrouter_default_model: str = "anthropic/claude-haiku-4.5"
-    openrouter_routing_model: str = "google/gemini-2.5-flash"
+    openrouter_routing_model: str = "deepseek/deepseek-v4.1-flash"
     openrouter_timeout_seconds: float = 120.0
     # How many times to retry a chat reply that fails for a temporary reason (rate limit, 5xx).
     chat_retries: int = 3
@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     history_max_messages: int = 60     # one workspace = one long conversation; the model's window trims further
     max_output_tokens: int = 4096
     max_attachment_mb: int = 20        # per attached file
+    compaction_enabled: bool = True    # summarise the old part of a long conversation (core/compaction.py)
+    compact_at_tokens: int = 24_000    # start summarising when the conversation is this big (estimate)
+    compact_keep_tokens: int = 8_000   # ...and keep about this much of the newest messages word for word
     mock_mode: bool = False           # True → skip real LLM calls (dev/test)
 
     # ── Server ────────────────────────────────────────────────────────────────

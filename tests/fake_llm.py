@@ -3,6 +3,9 @@
 It records every request (`server.requests`) and answers by a fixed script:
   the user's last line starts with "WRITE <path> <text>" -> asks Pi to call its write tool
   ... "READ <path>"                                       -> asks Pi to call its read tool
+  ... "MCP <tool> <json>"                                 -> asks Pi to call the connector tool <tool> with that JSON
+  ... "MCPSEARCH <text>"                                  -> asks the connector gateway to search its tools
+  ... "MCPINSTALL <url>"                                  -> asks the connector gateway to install a server (must be refused)
   a tool result comes back                                -> says what the tool returned
   anything else                                           -> says which model it is
 """
@@ -32,6 +35,13 @@ def _decide(body):
     if said.startswith("WRITE "):
         _, path, *rest = said.split(" ")
         return {"tool": ("write", _args(tools, "write", {"path": path, "content": " ".join(rest)}))}
+    if said.startswith("MCP "):
+        _, name, *rest = said.split(" ")
+        return {"tool": ("mcp", {"tool": name, "args": json.loads(" ".join(rest) or "{}")})}
+    if said.startswith("MCPSEARCH "):
+        return {"tool": ("mcp", {"search": said[10:]})}
+    if said.startswith("MCPINSTALL "):
+        return {"tool": ("mcp", {"action": "install", "url": said[11:]})}
     if said.startswith("READ "):
         return {"tool": ("read", _args(tools, "read", {"path": said[5:]}))}
     return {"text": f"[{model}] hello"}

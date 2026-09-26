@@ -41,8 +41,9 @@ def test_every_element_the_scripts_look_up_exists_in_the_page():
             looked_up.add(piece.split("'")[0])
     missing = sorted(i for i in looked_up if f'id="{i}"' not in html and i not in ("typing",))  # #typing is created by feed.js
     assert not missing, missing
-    for tool_switch in ("fPermRead", "fPermWrite", "fPermBash", "fPermAsk"):   # looked up through a list in agent-editor.js
-        assert f'id="{tool_switch}"' in html
+    # The tool picker's static parts (its lists are drawn by JavaScript).
+    for part in ("tpList", "tpDetail", "tpPills", "tpSearch", "tpGo", "toolRows", "connectToolBtn"):
+        assert f'id="{part}"' in html
 
 
 def test_every_script_is_valid_javascript(tmp_path):
