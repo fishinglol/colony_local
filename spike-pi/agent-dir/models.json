@@ -1,0 +1,13 @@
+{
+  "providers": {
+    "fake": {
+      "baseUrl": "http://127.0.0.1:8799/v1",
+      "api": "openai-completions",
+      "apiKey": "not-a-real-key",
+      "models": [
+        { "id": "fake-a" },
+        { "id": "fake-b" }
+      ]
+    }
+  }
+}

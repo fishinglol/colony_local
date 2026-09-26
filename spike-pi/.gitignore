@@ -1,0 +1,4 @@
+node_modules/
+run/
+agent-dir*/auth.json
+agent-dir*/models-store.json

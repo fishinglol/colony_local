@@ -1,0 +1,9 @@
+{
+  "name": "colony-spike-pi",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Throwaway experiment: can Pi be the tool-running engine behind Colony's agents? See README.md",
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1"
+  }
+}
