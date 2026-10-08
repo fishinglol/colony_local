@@ -292,6 +292,16 @@ def handle_message(request: MessageRequest) -> MessageResponse:
         assistant_response={"reply": reply_text, "model": actual_model, **meta},
         channel=channel,
     )
+    # OpenClaw Architecture: record episodic daily observation & trigger dreaming
+    try:
+        obs_text = f"User asked: {text[:80]} -> {role.name} answered"
+        if actions:
+            obs_text += f" [Actions: {', '.join(actions)}]"
+        memory.append_daily_observation(workspace_id, obs_text, origin=role.name)
+        memory.maybe_dream_in_background(workspace_id)
+    except Exception as exc:
+        logger.debug("Episodic observation recording skipped: %s", exc)
+
     memory.maybe_review_in_background(workspace_id, conversation_id)
     compaction.maybe_compact_in_background(workspace_id)
 

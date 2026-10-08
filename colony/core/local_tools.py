@@ -73,6 +73,20 @@ LOCAL_TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_search",
+            "description": "Search past memory, episodic daily notes, and learned workspace knowledge for past decisions, user preferences, or project facts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search keywords or question about the past"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -197,5 +211,37 @@ def execute_local_tool(
             return f"Error: Command timed out after {timeout} seconds.", f"timeout `{cmd[:30]}`"
         except Exception as exc:
             return f"Error running command: {exc}", None
+
+    elif tool_name == "memory_search":
+        q = args.get("query", "").strip()
+        if not q:
+            return "Please provide a search query.", None
+        from ..memory.episodic import search_daily_notes
+        from ..memory.files import memory_md_path, user_md_path, read_text
+        workspace_id = args.get("workspace_id") or folder.name
+        daily_hits = search_daily_notes(workspace_id, q, top_k=3)
+
+        mem_text = read_text(memory_md_path(workspace_id))
+        user_text = read_text(user_md_path(workspace_id))
+
+        findings = []
+        if daily_hits:
+            findings.append("### Episodic Daily Notes:")
+            for h in daily_hits:
+                findings.append(f"- [{h['date']}] {h['text']}")
+        if mem_text and q.lower() in mem_text.lower():
+            findings.append("### Relevant lines from MEMORY.md:")
+            for l in mem_text.splitlines():
+                if q.lower() in l.lower() and l.strip().startswith("- "):
+                    findings.append(l.strip())
+        if user_text and q.lower() in user_text.lower():
+            findings.append("### Relevant lines from USER.md:")
+            for l in user_text.splitlines():
+                if q.lower() in l.lower() and l.strip().startswith("- "):
+                    findings.append(l.strip())
+
+        if not findings:
+            return f"No memories found matching '{q}'.", None
+        return "\n".join(findings), f"searched memory for '{q[:20]}'"
 
     return f"Unknown tool: {tool_name}", None

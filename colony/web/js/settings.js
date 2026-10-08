@@ -43,8 +43,24 @@ export async function saveSettings() {
 
 export async function openMemory() {
   const ws = currentWorkspace();
-  $('memoryHint').textContent = `What every agent in ${ws ? ws.name : 'this workspace'} knows about you, whichever model answers. Say "remember …" in chat to add to it. Memory is separate for each workspace.`;
-  const { context } = await api(`/memory/context?workspace_id=${encodeURIComponent(state.workspaceId)}`);
-  $('memoryView').textContent = context || 'Nothing yet. Chat a bit, or say "remember that …".';
+  $('memoryHint').textContent = `What every agent in ${ws ? ws.name : 'this workspace'} knows about you (Curated MEMORY.md, Episodic Daily Notes & Dreaming). Say "remember …" in chat to add to it.`;
+  const [ctxRes, dailyRes, dreamsRes] = await Promise.all([
+    api(`/memory/context?workspace_id=${encodeURIComponent(state.workspaceId)}`),
+    api(`/memory/daily?workspace_id=${encodeURIComponent(state.workspaceId)}`).catch(() => ({ notes: [] })),
+    api(`/memory/dreams?workspace_id=${encodeURIComponent(state.workspaceId)}`).catch(() => ({ dreams: '' })),
+  ]);
+
+  let display = ctxRes.context || '';
+  if (dailyRes.notes && dailyRes.notes.length > 0) {
+    display += (display ? '\n\n' : '') + '═══ Recent Episodic Notes (Daily) ═══\n';
+    for (const n of dailyRes.notes.slice(0, 3)) {
+      display += `\n📅 ${n.date}:\n${n.content.trim()}\n`;
+    }
+  }
+  if (dreamsRes.dreams && dreamsRes.dreams.trim()) {
+    display += (display ? '\n\n' : '') + '═══ Dreaming Consolidation Log (DREAMS.md) ═══\n' + dreamsRes.dreams.trim();
+  }
+
+  $('memoryView').textContent = display || 'Nothing yet. Chat a bit, or say "remember that …".';
   openModal('memoryModal');
 }

@@ -125,6 +125,13 @@ def compact(workspace_id: str, settings: Settings | None = None) -> bool:
     cut = _cut(messages, settings.compact_keep_tokens)
     if cut == 0:
         return False
+    # OpenClaw Architecture: Pre-Compaction Memory Flush to Episodic Daily Notes
+    try:
+        from ..memory import flush_memory_before_compaction
+        flush_memory_before_compaction(workspace_id, messages[:cut], settings)
+    except Exception as exc:
+        logger.debug("Pre-compaction memory flush skipped: %s", exc)
+
     for chunk in _chunks(messages[:cut]):        # a very long stretch is folded in piece by piece
         summary = _summarise(settings, summary, chunk)
     summary = sanitize(summary[:MAX_SUMMARY_CHARS] if summary else None)

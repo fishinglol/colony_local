@@ -80,6 +80,12 @@ def learned_context(user_id: str, query: str | None = None) -> str | None:
         )
     if bodies:
         parts.append("Relevant learned skills/knowledge for this message:\n" + "\n".join(f"- {b}" for b in bodies))
+    if query:
+        from .episodic import search_daily_notes
+        daily_hits = search_daily_notes(user_id, query, top_k=2)
+        if daily_hits:
+            hit_lines = [f"{h['date']}: {h['text']}" for h in daily_hits]
+            parts.append("Relevant episodic memory from daily notes:\n" + "\n".join(hit_lines))
     return "\n\n".join(parts) if parts else None
 
 
