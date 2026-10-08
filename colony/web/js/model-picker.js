@@ -9,8 +9,24 @@ const HINT = 'Hover a model to see what it can do. Not listed? Type its id, like
 const READS = { text: 'text', image: 'images', file: 'files (PDF)', video: 'video', audio: 'audio' };
 let onPick = () => {};
 let currentId = '';
+let currentTab = 'all';
 let rows = [];      // the visible model buttons, in order (for the arrow keys)
 let active = -1;
+
+export function modelSource(m) {
+  if (m.source) return m.source;
+  if (m.id.startsWith('ollama/') || m.provider === 'ollama') return 'ollama';
+  if (m.id.startsWith('kaggle/') || m.provider === 'kaggle') return 'kaggle';
+  return 'openrouter';
+}
+
+export function modelSourceLabel(m) {
+  if (m.source_label) return m.source_label;
+  const s = modelSource(m);
+  if (s === 'ollama') return 'Ollama Cloud / Local';
+  if (s === 'kaggle') return 'Kaggle (your GPU)';
+  return 'OpenRouter';
+}
 
 // The list is fetched once (the server caches OpenRouter's catalog); until it arrives the picker shows a hint.
 export async function ensureModels() {
@@ -29,6 +45,7 @@ function capRows(m) {
   const known = (v, yes) => (v === true ? yes : v === false ? 'No' : 'Unknown');
   return [
     ['Model', m.label],
+    ['Source', modelSourceLabel(m)],
     ['Provider', m.provider_name],
     ['Inputs', c.inputs ? c.inputs.map((x) => READS[x] || x).join(', ') : 'Unknown'],
     ['Tools', known(c.tools, 'Yes: project files and commands')],
@@ -78,12 +95,42 @@ function hideTip() {
   const foot = $('pickerFoot'); foot.classList.remove('info'); foot.textContent = HINT;
 }
 
+function renderTabs() {
+  const container = $('pickerTabs');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const ollamaCount = state.modelPool.filter((m) => modelSource(m) === 'ollama').length;
+  const kaggleCount = state.modelPool.filter((m) => modelSource(m) === 'kaggle').length;
+  const orCount = state.modelPool.filter((m) => modelSource(m) === 'openrouter').length;
+
+  const tabs = [
+    { id: 'all', label: `All (${state.modelPool.length})` },
+    { id: 'ollama', label: `🦙 Ollama (${ollamaCount})` },
+    ...(kaggleCount > 0 ? [{ id: 'kaggle', label: `⚡ Kaggle GPU (${kaggleCount})` }] : []),
+    { id: 'openrouter', label: `🌐 OpenRouter (${orCount})` },
+  ];
+
+  tabs.forEach((t) => {
+    const tabBtn = el('button', 'picker-tab' + (currentTab === t.id ? ' active' : ''), t.label);
+    tabBtn.type = 'button';
+    tabBtn.onclick = () => {
+      currentTab = t.id;
+      renderTabs();
+      render();
+    };
+    container.appendChild(tabBtn);
+  });
+}
+
 function group(title, models) {
   const box = el('div', 'picker-group');
   box.appendChild(el('div', 'picker-group-title', title));
   models.forEach((m) => {
     const b = el('button', 'picker-row' + (m.id === currentId ? ' current' : '')); b.type = 'button'; b.dataset.id = m.id;
-    b.appendChild(el('span', 'picker-name', m.label));
+    const src = modelSource(m);
+    const srcBadge = el('span', `picker-source-badge ${src}`, src === 'ollama' ? 'Ollama' : src === 'kaggle' ? 'Kaggle' : 'OpenRouter');
+    b.append(srcBadge, el('span', 'picker-name', m.label));
     const tag = m.note || (m.id.endsWith(':free') ? 'Free' : '');
     if (tag) b.appendChild(el('span', 'picker-tag', tag));
     b.onmouseenter = () => highlight(rows.indexOf(b));
@@ -96,16 +143,54 @@ function group(title, models) {
 function render() {
   const query = $('pickerSearch').value.trim(), q = query.toLowerCase();
   const list = $('pickerList'); list.innerHTML = ''; rows = []; active = -1; hideTip();
-  const shown = state.modelPool.filter((m) => !q || `${m.label} ${m.id} ${m.provider_name}`.toLowerCase().includes(q));
+
+  let pool = state.modelPool;
+  if (currentTab !== 'all') {
+    pool = pool.filter((m) => modelSource(m) === currentTab);
+  }
+
+  const shown = pool.filter((m) => !q || `${m.label} ${m.id} ${m.provider_name} ${modelSourceLabel(m)}`.toLowerCase().includes(q));
+
   const groups = new Map();
-  shown.forEach((m) => { const title = m.suggested ? 'Suggested' : m.provider_name; if (!groups.has(title)) groups.set(title, []); groups.get(title).push(m); });
-  const titles = [...groups.keys()].sort((a, b) => (a === 'Suggested' ? -1 : b === 'Suggested' ? 1 : a.toLowerCase().localeCompare(b.toLowerCase())));
+  shown.forEach((m) => {
+    const src = modelSource(m);
+    let title = '';
+    if (src === 'ollama') {
+      title = '🦙 Ollama (Cloud & Local)';
+    } else if (src === 'kaggle') {
+      title = '⚡ Kaggle (Your GPU)';
+    } else if (m.suggested) {
+      title = '⭐ OpenRouter — Suggested';
+    } else if (m.id.endsWith(':free')) {
+      title = '🎁 OpenRouter — Free Models';
+    } else {
+      title = `🌐 OpenRouter — ${m.provider_name}`;
+    }
+    if (!groups.has(title)) groups.set(title, []);
+    groups.get(title).push(m);
+  });
+
+  const orderRank = (t) => {
+    if (t.includes('Ollama')) return 1;
+    if (t.includes('Kaggle')) return 2;
+    if (t.includes('Suggested')) return 3;
+    if (t.includes('Free Models')) return 4;
+    return 10;
+  };
+
+  const titles = [...groups.keys()].sort((a, b) => {
+    const rA = orderRank(a), rB = orderRank(b);
+    if (rA !== rB) return rA - rB;
+    return a.localeCompare(b);
+  });
+
   if (query.includes('/') && !state.modelPool.some((m) => m.id === query)) {
     const custom = group('Not in the list', [{ id: query, label: `Use “${query}”`, note: 'Custom model id', provider_name: 'Custom', capabilities: {} }]);
     list.appendChild(custom);
   }
+
   titles.forEach((t) => list.appendChild(group(t, groups.get(t))));
-  if (!rows.length) list.appendChild(el('div', 'picker-empty', state.modelPool.length ? 'No model matches. To use one that is not listed, type its id, like provider/model-name.' : 'Loading models…'));
+  if (!rows.length) list.appendChild(el('div', 'picker-empty', state.modelPool.length ? 'No model matches.' : 'Loading models…'));
   $('pickerCount').textContent = state.modelPool.length ? `${shown.length} of ${state.modelPool.length}` : '';
 }
 
@@ -128,11 +213,18 @@ export function closeModelPicker() { $('modelPicker').classList.remove('open'); 
 export async function openModelPicker(callback, current) {
   onPick = callback; currentId = current || '';
   $('pickerSearch').value = '';
+  currentTab = 'all';
   layout();
   $('modelPicker').classList.add('open');
+  renderTabs();
   render(); $('pickerSearch').focus();
-  try { await ensureModels(); } catch { $('pickerList').textContent = "Couldn't load the model list."; return; }
-  if ($('modelPicker').classList.contains('open')) render();
+  try {
+    await ensureModels();
+    renderTabs();
+    if ($('modelPicker').classList.contains('open')) render();
+  } catch {
+    $('pickerList').textContent = "Couldn't load the model list.";
+  }
 }
 
 export function initModelPicker() {

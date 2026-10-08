@@ -198,3 +198,22 @@ def test_model_picker_list_still_works_without_the_catalog():
     assert all(set(m["capabilities"]) == {"tools", "inputs", "reasoning", "reasoning_levels", "context"} for m in models)
     sonnet = next(m for m in models if m["id"] == "anthropic/claude-sonnet-5")
     assert sonnet["capabilities"]["context"] == 1_000_000 and sonnet["capabilities"]["inputs"] is None
+
+
+def test_model_picker_sources_categorization():
+    body = client.get("/api/models").json()
+    models = body["models"]
+    ollama_models = [m for m in models if m.get("source") == "ollama"]
+    openrouter_models = [m for m in models if m.get("source") == "openrouter"]
+
+    assert len(ollama_models) >= 6
+    assert any(m["id"] == "ollama/nemotron-3-nano:30b" for m in ollama_models)
+    assert any(m["id"] == "ollama/gpt-oss:120b" for m in ollama_models)
+    for om in ollama_models:
+        assert om["source_label"] == "Ollama API"
+        assert om["provider"] == "ollama"
+
+    assert len(openrouter_models) >= 5
+    for or_m in openrouter_models:
+        assert or_m["source_label"] == "OpenRouter"
+

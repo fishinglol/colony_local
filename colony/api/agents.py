@@ -62,6 +62,7 @@ def _kaggle_models(settings) -> list[dict]:
     ids = [m["id"] for m in data.get("data") or [] if isinstance(m, dict) and isinstance(m.get("id"), str)]
     return [{
         "id": KAGGLE_PREFIX + model_id, "provider": "kaggle", "provider_name": "Kaggle (your GPU)",
+        "source": "kaggle", "source_label": "Kaggle (your GPU)",
         "label": model_id, "note": "Free", "suggested": False,
         "capabilities": {"tools": None, "inputs": None, "reasoning": None, "reasoning_levels": None,
                          "context": settings.kaggle_context_window},
@@ -70,18 +71,38 @@ def _kaggle_models(settings) -> list[dict]:
 
 @router.get("/models")
 def get_models() -> dict:
-    """Every model the picker can offer: our suggested list first, then everything OpenRouter lists.
+    """Every model the picker can offer: grouped by backend (Ollama, Kaggle, OpenRouter).
     Each carries its capabilities (files/tools, images, video, reasoning, context) when the catalog is reachable."""
     settings = get_settings()
     catalog = model_catalog(settings)
-    models = [
-        {
-            "id": m.model_id, "provider": m.provider, "provider_name": PROVIDER_NAMES.get(m.provider, m.provider),
-            "label": m.label, "note": m.note, "suggested": True,
-            "capabilities": _capabilities(catalog.get(m.model_id), known_context_window(m.model_id)),
-        }
-        for m in MODEL_POOL
-    ]
+    from ..llm.ollama import OLLAMA_CLOUD_MODELS, normalize_ollama_model_id
+
+    models = []
+    for m in MODEL_POOL:
+        if m.provider == "ollama":
+            clean = normalize_ollama_model_id(m.model_id)
+            c_info = OLLAMA_CLOUD_MODELS.get(clean, {})
+            caps = {
+                "tools": c_info.get("tools", True),
+                "inputs": ["text"],
+                "reasoning": c_info.get("reasoning", False),
+                "reasoning_levels": None,
+                "context": c_info.get("context", m.context or 128_000),
+            }
+            models.append({
+                "id": m.model_id, "provider": m.provider, "provider_name": "Ollama Cloud / Local",
+                "source": "ollama", "source_label": "Ollama API",
+                "label": m.label, "note": m.note, "suggested": True,
+                "capabilities": caps,
+            })
+        else:
+            models.append({
+                "id": m.model_id, "provider": m.provider, "provider_name": PROVIDER_NAMES.get(m.provider, m.provider),
+                "source": "openrouter", "source_label": "OpenRouter",
+                "label": m.label, "note": m.note, "suggested": True,
+                "capabilities": _capabilities(catalog.get(m.model_id), known_context_window(m.model_id)),
+            })
+
     models = _kaggle_models(settings) + models
     listed = {m["id"] for m in models}
     for model_id, info in sorted(catalog.items(), key=lambda item: item[0]):
@@ -92,6 +113,7 @@ def get_models() -> dict:
         provider_name, sep, label = name.partition(": ")      # OpenRouter names look like "Google: Gemini 3 Flash"
         models.append({
             "id": model_id, "provider": maker.lstrip("~"), "provider_name": provider_name if sep else PROVIDER_NAMES.get(maker, maker),
+            "source": "openrouter", "source_label": "OpenRouter",
             "label": label if sep else name, "note": "Free" if model_id.endswith(":free") else "", "suggested": False,
             "capabilities": _capabilities(info, None),
         })
