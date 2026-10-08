@@ -90,7 +90,9 @@ function addAgent(text, meta, iso, question, files = []) {
   const msg = el('div', 'msg'), col = el('div', 'msg-col'), head = el('div', 'msg-head');
   head.append(el('span', 'msg-name', meta.role_name || 'AI'), el('span', 'msg-time', timeOf(iso)));
   if (meta.model && meta.model !== 'none') head.append(el('span', 'tag', shortModel(meta.model)));
-  if (meta.decided_by === 'jev' || meta.decided_by === 'laya') {
+  if (meta.decided_by === 'ollama') {
+    head.append(el('span', 'tag jev', `⚡ Nemotron ${Math.round((meta.confidence || 0) * 100)}%`));
+  } else if (meta.decided_by === 'jev' || meta.decided_by === 'laya') {
     head.append(el('span', 'tag jev', `${meta.decided_by === 'jev' ? 'Jev' : 'Laya'} ${Math.round((meta.confidence || 0) * 100)}%`));
   }
   if (meta.decided_by === 'fallback') {
@@ -99,6 +101,19 @@ function addAgent(text, meta, iso, question, files = []) {
   }
   if (meta.memory_saved) head.append(el('span', 'tag mem', 'Saved to memory'));
   const body = el('div', 'md'); body.innerHTML = renderMarkdown(text);
+
+  // Completed actions card if tools were executed
+  if (meta.actions && meta.actions.length > 0) {
+    const actCard = el('div', 'msg-actions-card');
+    actCard.appendChild(el('div', 'msg-actions-head', `🛠️ Executed actions (${meta.actions.length})`));
+    const list = el('div', 'msg-actions-list');
+    meta.actions.forEach((a) => {
+      list.appendChild(el('div', 'msg-action-pill', a));
+    });
+    actCard.appendChild(list);
+    body.appendChild(actCard);
+  }
+
   const actions = el('div', 'msg-actions'), copy = el('button', null, 'Copy');
   copy.onclick = async () => { await navigator.clipboard.writeText(text); toast('Copied'); };
   actions.appendChild(copy);
@@ -113,11 +128,44 @@ function addAgent(text, meta, iso, question, files = []) {
 
 function addTyping(roleId) {
   const msg = el('div', 'msg'); msg.id = 'typing';
-  const role = state.roles.find((r) => r.id === roleId);
+  const act = state.activity || {};
+  const agentName = act.agent_name || (state.roles.find((r) => r.id === roleId)?.name);
+  const role = state.roles.find((r) => r.id === (roleId || (act.agent_name ? state.roles.find((x) => x.name === act.agent_name)?.id : null)));
   const col = el('div', 'msg-col'), head = el('div', 'msg-head');
-  head.append(el('span', 'msg-name', role ? role.name : 'Jev is choosing an agent…'));
+
+  let title = 'Deciding which agent answers…';
+  if (act.step === 'routing') title = '⚡ Routing intent (Nemotron-3-nano / Jev)…';
+  else if (agentName) title = `${agentName} is working…`;
+
+  head.append(el('span', 'msg-name', title));
+  if (act.model) head.append(el('span', 'tag', shortModel(act.model)));
+
   const dots = el('div', 'typing'); dots.append(el('span'), el('span'), el('span'));
-  col.append(head, dots); msg.append(avatar(role, true), col);
+
+  // Live real-time activity card
+  const liveCard = el('div', 'live-activity-card');
+  const statusRow = el('div', 'live-status-row');
+  const pulse = el('span', 'live-pulse');
+  const detail = el('span', 'live-detail', act.detail || 'Processing request through Colony architecture…');
+  statusRow.append(pulse, detail);
+  liveCard.appendChild(statusRow);
+
+  if (act.command) {
+    const cmdRow = el('div', 'live-cmd-pill');
+    cmdRow.append(el('span', 'cmd-badge', 'COMMAND'), el('code', null, act.command));
+    liveCard.appendChild(cmdRow);
+  }
+
+  if (act.actions && act.actions.length > 0) {
+    const historyBox = el('div', 'live-actions-history');
+    act.actions.forEach((a) => {
+      historyBox.append(el('div', 'live-action-item', `✓ ${a}`));
+    });
+    liveCard.appendChild(historyBox);
+  }
+
+  col.append(head, dots, liveCard);
+  msg.append(avatar(role, true), col);
   $('feedInner').appendChild(msg); scrollDown();
 }
 
@@ -140,19 +188,33 @@ async function answerApproval(id, approve) {
   try { await api(`/approvals/${id}`, { method: 'POST', body: JSON.stringify({ approve }) }); } catch { /* it timed out meanwhile */ }
 }
 
-// While a reply is on its way, ask the server every so often whether an agent is waiting for a yes/no.
+// While a reply is on its way, ask the server for active status and pending approvals.
 let approvalTimer = null;
 function watchApprovals(on) {
   clearInterval(approvalTimer);
   state.approvals = [];
+  state.activity = null;
   if (!on) return;
   approvalTimer = setInterval(async () => {
     try {
-      const { approvals } = await api('/approvals');
+      const [appRes, actRes] = await Promise.all([
+        api('/approvals').catch(() => ({ approvals: [] })),
+        api(`/activity?workspace_id=${encodeURIComponent(state.workspaceId || '')}`).catch(() => ({ active: false })),
+      ]);
+      const approvals = appRes.approvals || [];
       const ids = (list) => list.map((a) => a.id).join();
-      if (ids(approvals) !== ids(state.approvals)) { state.approvals = approvals; renderFeed(); }
+      let changed = false;
+      if (ids(approvals) !== ids(state.approvals)) {
+        state.approvals = approvals;
+        changed = true;
+      }
+      if (JSON.stringify(actRes) !== JSON.stringify(state.activity)) {
+        state.activity = actRes;
+        changed = true;
+      }
+      if (changed) renderFeed();
     } catch { /* server busy; try again */ }
-  }, 800);
+  }, 400);
 }
 
 export function autosize() { const t = $('prompt'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 200) + 'px'; }

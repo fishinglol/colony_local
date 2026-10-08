@@ -50,3 +50,14 @@ def get_context(workspace_id: str | None = None) -> dict:
     except WorkspaceNotFound as exc:
         raise HTTPException(status_code=404, detail="That workspace doesn't exist.") from exc
     return {"agents": report(workspace.id, workspace.roles, get_settings())}
+
+
+@router.get("/activity")
+def get_activity_status(workspace_id: str | None = None) -> dict:
+    """Live activity status of the currently running turn in a workspace."""
+    try:
+        ws_id = get_workspace(workspace_id).id
+    except WorkspaceNotFound:
+        ws_id = workspace_id or "local"
+    from ..core.activity import get_activity
+    return get_activity(ws_id)

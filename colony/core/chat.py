@@ -147,9 +147,19 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     if not candidates:
         return _notice(workspace_id, _nobody_can_read(roles, refs, blocked, any(effective_tools(r).any_on for r in roles)), {"channel": channel})
 
+    from .activity import set_activity
+    set_activity(workspace_id, step="routing", detail="Routing intent (Nemotron-3-nano / Jev)...")
+
     decision = decide(message=text, roles=candidates, settings=settings, direct_role=direct)
     role = decision.role
     tools = effective_tools(role)
+    set_activity(
+        workspace_id,
+        step="thinking",
+        agent_name=role.name,
+        model=role.model,
+        detail=f"{role.name} ({role.model}) is preparing response...",
+    )
     # Where this was typed: the group chat ("auto") or an agent's direct chat. Display only.
     meta = {
         "channel": channel,
@@ -197,6 +207,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
                 settings=settings,
                 folder=folder,
                 agent_name=role.name,
+                workspace_id=workspace_id,
                 tools_enabled=True,
             )
             reply_text, actual_model, actions = loop_res.reply, role.model, loop_res.actions
@@ -305,8 +316,12 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     memory.maybe_review_in_background(workspace_id, conversation_id)
     compaction.maybe_compact_in_background(workspace_id)
 
+    from .activity import clear_activity
+    clear_activity(workspace_id)
+
     return MessageResponse(
         workspace_id=workspace_id, message_id=assistant_msg_id,
         reply=reply_text, model=actual_model, memory_saved=memory_saved,
+        actions=actions,
         created_at=_now(), **meta,
     )
