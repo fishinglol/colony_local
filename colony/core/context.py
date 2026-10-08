@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from .. import memory
 from ..config import Settings
 from ..llm.http import ProviderError, get_json
+from ..llm.ollama import OLLAMA_CLOUD_MODELS, is_ollama, normalize_ollama_model_id
 from ..llm.providers import OPENROUTER_BASE, build_messages
 from . import attachments, compaction
 from .agents import Role
@@ -79,6 +80,12 @@ def _ensure_live_catalog() -> None:
 
 def context_window(model_id: str, settings: Settings) -> int | None:
     """Max context (tokens): our table first, then OpenRouter's live catalog. None if unknown."""
+    if model_id.startswith("kaggle/"):
+        return settings.kaggle_context_window
+    if is_ollama(model_id):
+        clean = normalize_ollama_model_id(model_id)
+        info = OLLAMA_CLOUD_MODELS.get(clean)
+        return info.get("context", settings.ollama_context_window) if info else settings.ollama_context_window
     known = known_context_window(model_id)
     if known or settings.mock_mode:
         return known
@@ -118,6 +125,10 @@ def reasoning_param(model_id: str, level: str, settings: Settings) -> dict | Non
 def supports_tools(model_id: str, settings: Settings) -> bool | None:
     """Can this model call tools (read/write files, run commands)? OpenRouter's catalog says.
     None = unknown (offline, mock mode, or a model the catalog doesn't list) — callers should allow it."""
+    if is_ollama(model_id):
+        clean = normalize_ollama_model_id(model_id)
+        info = OLLAMA_CLOUD_MODELS.get(clean)
+        return info.get("tools", True) if info else True
     if settings.mock_mode:
         return None
     _ensure_live_catalog()

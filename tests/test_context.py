@@ -167,3 +167,10 @@ def test_a_long_pasted_update_is_accepted_and_counts_toward_the_gauge():
     conv = r.json()["workspace_id"]
     row = next(a for a in client.get(f"/api/context?workspace_id={conv}").json()["agents"] if a["role_id"] == "coding")
     assert row["used_tokens"] > 10_000 and row["percent"] > 30  # a big share of the 32k window
+
+
+def test_every_model_is_told_the_current_date_and_time():
+    from datetime import datetime
+    from colony.llm.providers import system_messages
+    text = " ".join(m["content"] for m in system_messages("acme/m", "Planner", "", None))
+    assert "Right now it is " + datetime.now().astimezone().strftime("%A %Y-%m-%d") in text

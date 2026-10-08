@@ -170,6 +170,21 @@
       <input id="fKey" type="password" autocomplete="off" placeholder="sk-or-v1-…">
       <small id="keyStatus"></small>
     </div>
+    <div class="field">
+      <label>Kaggle server URL (optional)</label>
+      <input id="fKaggle" type="url" autocomplete="off" placeholder="https://….trycloudflare.com">
+      <small>Your own free models on a Kaggle GPU. Run <span style="font-family:var(--font-mono)">kaggle/colony_server.py</span> in a Kaggle notebook and paste the address it prints. It changes each time the notebook restarts. Then pick a “Kaggle (your GPU)” model for an agent.</small>
+    </div>
+    <div class="field">
+      <label>Ollama API URL (optional)</label>
+      <input id="fOllamaUrl" type="url" autocomplete="off" placeholder="http://localhost:11434">
+      <small>Local Ollama instance or cloud endpoint for Nemotron, Gemma, and GPT-OSS models.</small>
+    </div>
+    <div class="field">
+      <label>Ollama API Key (optional)</label>
+      <input id="fOllamaKey" type="password" autocomplete="off" placeholder="Bearer / API key if required">
+      <small id="ollamaKeyStatus"></small>
+    </div>
     <div class="form-error" id="settingsError"></div>
     <div class="actions"><div class="right">
       <button class="btn" data-close="settingsModal">Cancel</button>

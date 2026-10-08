@@ -5,7 +5,7 @@ the file work. Colony stays in charge of everything else: which agent answers, t
 and memory (they arrive as the system prompt and the prompt), and who may do what (colony-gate.ts).
 
 Each turn is a fresh `pi --mode rpc --no-session` process: Colony's own history is the single source of truth,
-so there is no second conversation store to keep in step. See local/spike-pi/README.md for how this was proven.
+so there is no second conversation store to keep in step. See spike-pi/README.md for how this was proven.
 """
 import json
 import os
@@ -21,6 +21,7 @@ from typing import Callable
 from ..config import Settings
 from ..core.agents import ToolAccess
 from ..llm.http import ProviderError
+from ..llm.providers import KAGGLE_PREFIX, is_kaggle
 
 GATE = Path(__file__).with_name("colony-gate.ts")
 RUNTIME_DIR = Path(__file__).resolve().parents[2] / "pi-runtime"
@@ -141,21 +142,27 @@ def run_turn(
     Raises EngineError (engine problem), ProviderError (the model call failed)."""
     pi = find_pi(settings)
     if not pi:
-        raise EngineError("ยังไม่ได้ติดตั้ง Pi (ตัวรันเครื่องมือของ agent) รัน `npm install` ในโฟลเดอร์ `local/pi-runtime` ก่อน แล้วลองใหม่")
-    if not settings.openrouter_api_key:
+        raise EngineError("ยังไม่ได้ติดตั้ง Pi (ตัวรันเครื่องมือของ agent) รัน `npm install` ในโฟลเดอร์ `pi-runtime` ก่อน แล้วลองใหม่")
+    if is_kaggle(model):
+        if not settings.kaggle_base_url:
+            raise EngineError("ยังไม่ได้ใส่ URL ของ Kaggle server ใน **Settings**")
+        model, base_url, key = model[len(KAGGLE_PREFIX):], settings.kaggle_base_url, "kaggle"   # the server needs no key
+    elif not settings.openrouter_api_key:
         raise EngineError("agent ที่ใช้เครื่องมือต้องมี OpenRouter API key ตั้งค่าที่ **Settings** ก่อน")
+    else:
+        base_url, key = settings.openrouter_base_url, settings.openrouter_api_key
 
     agent_dir = settings.data_dir / "pi-agent"
     _write_private(agent_dir / "models.json", json.dumps({"providers": {PROVIDER: {
-        "baseUrl": settings.openrouter_base_url, "api": "openai-completions",
-        "apiKey": settings.openrouter_api_key,
+        "baseUrl": base_url, "api": "openai-completions",
+        "apiKey": key,
         "models": [{"id": model, **_thinking_config(thinking)}],
     }}}))
     _write_private(agent_dir / "system-prompt.md", system_prompt)
     use_mcp = tools.mcp != "off" and bool(mcp_servers)
     if use_mcp:
         if not (MCP_EXTENSION.exists() and MCP_ADAPTER.exists()):
-            raise EngineError("ยังไม่ได้ติดตั้งตัวเชื่อม MCP รัน `npm install` ในโฟลเดอร์ `local/pi-runtime` ก่อน แล้วลองใหม่")
+            raise EngineError("ยังไม่ได้ติดตั้งตัวเชื่อม MCP รัน `npm install` ในโฟลเดอร์ `pi-runtime` ก่อน แล้วลองใหม่")
         _write_private(agent_dir / "mcp-turn.json", json.dumps({"mcpServers": mcp_servers}))
     tools = tools if use_mcp or tools.mcp == "off" else tools.model_copy(update={"mcp": "off"})   # no servers = no connector tool
 

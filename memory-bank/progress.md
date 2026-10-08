@@ -1,7 +1,48 @@
 # Progress — Colony Local
-(Newest first within each phase. Dates are 2026-09-24 → 2026-09-26.)
+(Newest first within each phase. Dates are 2026-09-24 → 2026-09-29.)
 
 ## Done ✅
+
+### Current date in every prompt (2026-10-01)
+`providers._identity_system_message` now adds "Right now it is <weekday YYYY-MM-DD HH:MM> (the user's local time)…" so
+models can tell what is overdue (before, no model knew today's date). Covers plain chat and Pi (shared `system_messages`).
+Motivation: the owner wants a daily-life use (morning briefing over their Obsidian vault `Fais OS/my own schedule`:
+`Main.md` + `Brain Dump.md`, simple-table to-do lists with deadlines) and worried small models are not smart enough.
+Plan agreed: workspace "Daily" with project folder = the vault folder, Planner (gemma4, read-only, write = ask) + Writer;
+models propose, the owner decides; deterministic date maths belongs in code, not the model; test against the real files
+(known answers: "Record voice" overdue since 2026-09-29 14:00, "make colony work" due 2026-10-01) on the next Kaggle run.
+Tests 188 → 189. One test failed once during an abnormally slow run (8 min); re-run: 189 pass (suspected timeout flake
+under load, test not identified).
+
+### Model shootout on Kaggle (2026-09-30)
+Ran 5 candidates through `kaggle/model_exam.py` (Thai chat/writing/reasoning/facts, Python code, Pi file-write) on a T4×2
+run of `colony-models-eval`; cancelled after 31 min. Winner set: gemma4:12b + ornith:9b + qwen3.5:9b (see activeContext).
+Also: `errors._kaggle_hint` now says "model failed, server still up" for HTTP 500 (was "notebook stopped"); notebook script
+has `PRELOAD` and skips a model whose pull fails instead of aborting. Tests 187 → 188.
+
+### Kaggle provider + Laya decider (2026-09-29, owner has no money; OpenRouter balance negative)
+- **Kaggle provider.** `llm/providers._endpoint()`: a model id `kaggle/<name>` → `{KAGGLE_BASE_URL}/chat/completions`,
+  no key, no OpenRouter-only fields (reasoning, web plugin); used by chat, "Test this model" (longer timeout: first request
+  loads the model), `complete_chat`. `engine/pi.py` writes the Kaggle URL into Pi's models.json for `kaggle/` models (no
+  OpenRouter key needed). Context window for Kaggle models = `KAGGLE_CONTEXT_WINDOW` (16384 = the notebook's
+  OLLAMA_CONTEXT_LENGTH). `/api/models` lists the server's models first as "Kaggle (your GPU)". Settings has a
+  "Kaggle server URL" field (`/api/settings` accepts it with/without `/v1`, "" clears). Thai errors: no URL / model not
+  pulled / notebook down (`core/errors._kaggle_hint`). The identity system message no longer says "via OpenRouter".
+- **Kaggle notebook** `kaggle/colony_server.py` (+ `.ipynb`): background setup script (untar Ollama, `ollama serve`,
+  pull + preload qwen3:8b, gemma3:12b, glm4:9b, cloudflared quick tunnel); the cell prints progress and the URL.
+  Run it as Save & Run All with GPU. Verified on the owner's account: ready in ~6.5 min.
+- **Laya decider.** `core/decider.py`: `LAYA_URL` set → the same Jev-shaped request to `{LAYA_URL}/v1/systemone`,
+  model `multilingual`, no key, `decided_by = "laya"` (UI tag `Laya NN%`, fallback tag says "Jev/Laya unavailable").
+  `cli._start_laya()` starts `laya-runtime/serve.py` (port 8790) when `laya-runtime/.venv` exists and sets `LAYA_URL`;
+  `serve.py` kills its own process group when Colony's stdin pipe closes (verified for SIGTERM and SIGKILL).
+  `laya-runtime/requirements.txt` pins what works on an Intel Mac: Python 3.11 (pyenv 3.11.13), laya[serve] 0.3.21,
+  torch 2.2.2, transformers <5, numpy <2 (torch has no newer Intel-Mac builds; transformers 5 needs newer torch).
+- **Real results:** Thai routing mostly right (misses noted in activeContext); Gemma/GLM 2-5 s, Qwen3 ~16 s; Pi tool turn
+  on `kaggle/qwen3:8b` wrote a file; glm4:9b doesn't call tools.
+- Tests: `tests/test_kaggle.py` (7, incl. real Pi against the fake model server) + 2 Laya tests in `test_decider.py`.
+  178 → 187.
+- Rejected on the way: moving to Kaggle only for rate limits (first answer: top up $10 — owner has no money); local
+  Ollama (Mac too weak); OpenJev (hardware).
 
 ### Logos + Colony theme for the tool window (2026-09-26)
 Real app logos: the page loads `https://logos.composio.dev/api/<slug>` (Composio's logo service; 94 of the 97 catalogue apps have one, mapping in `web/js/apps-catalog.js`
@@ -131,12 +172,11 @@ is refused with 400). Idea not built: send PDFs through OpenRouter's file-parser
 - Audit bugs fixed (Jev parser, strict memory scan lying about success, multi-line key injection, etc.).
 
 ## Remaining / next 🔜
-- Owner runs a real tools turn in the app; fix what surfaces.
-- Commit/push everything from the tools + desktop work (see activeContext.md → Git state).
-- Native folder picker; git checkpoint per agent turn; diff view in approvals.
-- Shippable installer (bundle Python + Node/Pi) — needs dependency approval.
-- Long-lived Pi process for faster turns; streaming replies (currently one blocking POST).
-- Optional: per-conversation approvals; a way to see/undo what an agent changed.
+- Owner moves their real workspace onto the Kaggle models; fix what surfaces.
+- Commit the memory-bank move + 2026-09-29 work (no remote yet).
+- Memory review / compaction on a Kaggle model; Qwen3 thinking control; auth on the tunnel; "is Kaggle up?" indicator.
+- Git checkpoint per agent turn; diff view in approvals; long-lived Pi process; streaming replies.
+- Shippable installer (bundle Python + Node/Pi + Laya) — needs dependency approval.
 
 ## Explicitly rejected (do not rebuild) ❌
 - **Delegating implementation to opencode** ("คุณทำไม่ใช่ให้มันทำ") and any "handoff" talk.
@@ -149,4 +189,6 @@ is refused with 400). Idea not built: send PDFs through OpenRouter's file-parser
 - **Prices in the model dropdown.**
 - **Regex** in any of our code; `marked`/raw innerHTML for model text; CORS.
 - **Room-isolated context** (rooms are display only).
-- Silent fallbacks: Jev failures and tool refusals must be visible.
+- Silent fallbacks: decider (Jev/Laya) failures and tool refusals must be visible.
+- **OpenJev** as the decider (needs a 24 GB NVIDIA GPU or Apple Silicon; no CPU mode). **Running chat models on the
+  owner's Mac** (Intel, 8 GB). **Ollama's install.sh on Kaggle** (its progress output killed the session).

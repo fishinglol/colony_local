@@ -69,7 +69,7 @@ fn start_server(app: &tauri::AppHandle, window: &WebviewWindow) {
                 window,
                 &format!(
                     "Could not start the Colony server ({}): {err}\n\
-                     Install it with `pip install -e local` or set COLONY_BIN to the colony command.",
+                     Install it with `pip install -e .` in the Colony-Local folder or set COLONY_BIN to the colony command.",
                     command.display()
                 ),
             )

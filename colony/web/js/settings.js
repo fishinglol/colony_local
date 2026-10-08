@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { $, closeModal, openModal, toast } from './dom.js';
 import { currentWorkspace, state } from './state.js';
+import { ensureModels } from './model-picker.js';
 
 export async function refreshHealth() {
   const h = await api('/health');
@@ -15,15 +16,28 @@ export async function refreshHealth() {
 export async function openSettings() {
   const s = await api('/settings');
   $('fKey').value = '';
+  $('fKaggle').value = s.kaggle_base_url;
+  $('fOllamaUrl').value = s.ollama_base_url || '';
+  $('fOllamaKey').value = '';
   $('keyStatus').textContent = s.has_openrouter_key ? `Current key: ${s.openrouter_key_masked}` : 'No key set yet.';
+  $('ollamaKeyStatus').textContent = s.has_ollama_key ? `Current key: ${s.ollama_key_masked}` : 'No key set.';
   $('settingsError').textContent = '';
   openModal('settingsModal');
 }
 
 export async function saveSettings() {
   try {
-    await api('/settings', { method: 'POST', body: JSON.stringify({ openrouter_api_key: $('fKey').value }) });
+    await api('/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        openrouter_api_key: $('fKey').value,
+        kaggle_base_url: $('fKaggle').value,
+        ollama_base_url: $('fOllamaUrl').value,
+        ollama_api_key: $('fOllamaKey').value,
+      }),
+    });
     closeModal('settingsModal'); toast('Saved'); refreshHealth();
+    state.modelPool = []; ensureModels();   // reload so the Kaggle/Ollama server's models show up in the picker
   } catch (err) { $('settingsError').textContent = err.message; }
 }
 

@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     # How many times to retry a chat reply that fails for a temporary reason (rate limit, 5xx).
     chat_retries: int = 3
 
+    # Your own open-weight models on a Kaggle notebook (kaggle/colony_server.py): its tunnel URL ending in /v1.
+    # Agents use it by picking a model id "kaggle/<name>". The URL changes every time the notebook restarts.
+    kaggle_base_url: str | None = None
+    kaggle_context_window: int = 16_384      # must match OLLAMA_CONTEXT_LENGTH in the notebook
+
+    # ── Ollama API (Local or Cloud endpoint) ──────────────────────────────────
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_api_key: str | None = None
+    ollama_context_window: int = 32_768
+
     openai_api_key: str | None = None
     openai_default_model: str = "gpt-5-mini"
     openai_timeout_seconds: float = 30.0
@@ -32,12 +42,15 @@ class Settings(BaseSettings):
     # Uses the same openrouter_api_key — no separate key needed.
     jev_model: str = "typesafe/jev-1.13"
     jev_decisions_url: str = "https://openrouter.ai/api/alpha/decisions"
+    # Laya (open-weight, runs on this computer) answers the same question instead of Jev when set.
+    # `colony` sets it itself when laya-runtime/ is installed (cli.py).
+    laya_url: str | None = None
 
     # ── Agent tools (files + commands, run by the Pi engine) ──────────────────
     # Old global "workspace folder" setting; only read once, to give the first workspace its project folder
     # (core/workspaces.py). Each workspace now has its own folder.
     workspace_dir: Path | None = None
-    pi_bin: str | None = None                 # path to Pi; unset = look in local/pi-runtime, then PATH
+    pi_bin: str | None = None                 # path to Pi; unset = look in pi-runtime/, then PATH
     openrouter_base_url: str = "https://openrouter.ai/api/v1"   # used by Pi; tests point it at a fake server
     tools_turn_timeout_seconds: float = 600.0     # one agent turn with tools, including waiting for approvals
     approval_timeout_seconds: float = 120.0       # no answer to "allow this?" in time = no

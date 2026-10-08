@@ -1,0 +1,7 @@
+# Laya: the local decision model that picks who answers in # mix (instead of Jev on OpenRouter).
+# Install:  ~/.pyenv/versions/3.11.13/bin/python -m venv laya-runtime/.venv && laya-runtime/.venv/bin/pip install -r laya-runtime/requirements.txt
+# Pinned for Intel Macs: torch 2.2.2 is the last build for them, and transformers 5 needs a newer torch.
+laya[serve]==0.3.21
+torch==2.2.2
+transformers>=4.56,<5
+numpy<2

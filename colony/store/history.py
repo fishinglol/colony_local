@@ -82,6 +82,17 @@ def append_exchange(
     ])
     data["conversations"] = conversations
     store.write(data)
+    try:
+        from .sqlite_history import append_exchange_sqlite
+        append_exchange_sqlite(
+            conversation_id=conversation_id,
+            user_message=user_message,
+            assistant_response=assistant_response,
+            channel=channel,
+            attachments=attachments,
+        )
+    except Exception:
+        pass
     return user_msg_id, assistant_msg_id
 
 

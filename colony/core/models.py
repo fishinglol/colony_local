@@ -19,6 +19,7 @@ PROVIDER_NAMES = {
     "qwen": "Qwen",
     "nvidia": "NVIDIA",
     "z-ai": "Z.ai (GLM)",
+    "ollama": "Ollama Cloud",
 }
 
 
@@ -60,6 +61,13 @@ MODEL_POOL: tuple[PoolModel, ...] = (
     PoolModel("google",     "google/gemma-4-31b-it:free",            "Gemma 4 31B (free)",           "Free", context=262_144),
     PoolModel("nvidia",     "nvidia/nemotron-3-super-120b-a12b:free", "Nemotron 3 Super 120B (free)", "Free", context=262_144),
     PoolModel("z-ai",       "z-ai/glm-5.2:free",                     "GLM 5.2 (free)",               "Free · 32k context", context=32_768),
+    # Ollama Cloud / Free models
+    PoolModel("ollama",     "ollama/nemotron-3-nano:30b",            "Nemotron 3 Nano 30B",          "Router / Fast", context=128_000),
+    PoolModel("ollama",     "ollama/nemotron-3-super",               "Nemotron 3 Super",             "Reasoning", context=262_144),
+    PoolModel("ollama",     "ollama/nemotron-3-ultra",               "Nemotron 3 Ultra",             "Top Reasoning", context=1_000_000),
+    PoolModel("ollama",     "ollama/gemma4:31b",                     "Gemma 4 31B",                  "Writer / Chat", context=262_144),
+    PoolModel("ollama",     "ollama/gpt-oss:20b",                    "GPT OSS 20B",                  "Code / Data", context=128_000),
+    PoolModel("ollama",     "ollama/gpt-oss:120b",                   "GPT OSS 120B",                 "Deep Code", context=262_144),
 )
 
 

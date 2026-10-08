@@ -2,9 +2,24 @@
 from ..llm.http import ProviderError
 
 
+def _kaggle_hint(status: int | None, model: str) -> str:
+    if status == 401:
+        return "ยังไม่ได้ใส่ URL ของ Kaggle server เปิด **Settings** แล้ววาง URL ที่ notebook พิมพ์ออกมา"
+    if status in (400, 404):
+        return (f"Kaggle server ไม่มีโมเดล `{model[len('kaggle/'):]}` ตรวจชื่อโมเดล (กด ✎) "
+                "หรือเพิ่มชื่อนี้ในรายการ MODELS ของ notebook แล้วรันใหม่")
+    if status == 500:
+        return (f"Kaggle server ตอบกลับว่าโมเดล `{model[len('kaggle/'):]}` ทำงานไม่ได้ (server ยังเปิดอยู่) "
+                "อาจเป็นเพราะหน่วยความจำ GPU ไม่พอหรือโหลดโมเดลไม่สำเร็จ ลองเปลี่ยนไปใช้โมเดลอื่น")
+    return ("ติดต่อ Kaggle server ไม่ได้ notebook อาจหยุดไปแล้ว (Kaggle ปิด session เองเมื่อครบเวลา) "
+            "เปิด notebook รันใหม่ แล้ววาง URL ใหม่ใน **Settings**")
+
+
 def explain(exc: ProviderError, model: str) -> str:
     status = exc.status
-    if status == 429:
+    if model.startswith("kaggle/"):
+        hint = _kaggle_hint(status, model)
+    elif status == 429:
         hint = (f"โมเดล `{model}` ถูกจำกัดจำนวนครั้งชั่วคราว (โมเดลฟรีมักเป็นแบบนี้เพราะทุกคนใช้โควตากลางร่วมกัน) "
                 "ระบบลองซ้ำให้แล้วแต่ยังไม่ผ่าน ลองส่งใหม่อีกสักครู่ หรือกด **Ask another agent** ใต้ข้อความของคุณเพื่อให้ agent ตัวอื่นตอบแทน")
     elif status == 403 and "agentic" in (exc.provider_message or "").lower():

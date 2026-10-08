@@ -11,7 +11,7 @@ one idea: *one conversation, many models, nobody needs to be told twice.*
   and its own project folder. Menu: switch, ＋ New workspace (start from the default team or a copy of
   another workspace's agents), ⚙ Workspace settings (rename, project folder, delete). There is no
   "New chat": a fresh context = a new workspace.
-- **Sidebar:** `# mix` channel (the group chat; Jev picks who answers), **Direct Agents** (one row per
+- **Sidebar:** `# mix` channel (the group chat; the decider — Laya on this computer, or Jev — picks who answers), **Direct Agents** (one row per
   agent; the header of a direct chat lists what that agent may do), Memory (this workspace's), Settings (API key).
 - **Rooms:** the mix chat (`auto` internally) and each agent's direct chat are separate
   *displays* inside a workspace. Switching rooms changes only what is shown; **every agent still
@@ -40,7 +40,9 @@ one idea: *one conversation, many models, nobody needs to be told twice.*
   command, an Allow/Deny card appears under its typing indicator.
 - **Memory viewer:** what every agent knows about the user. Saying "remember …"
   saves immediately; otherwise a background review runs every 5 turns.
-- Replies show speaker name, model tag, Jev confidence (or a "Jev unavailable —
+- **Settings:** OpenRouter key and **Kaggle server URL** (paste the address the Kaggle notebook prints; the model
+  picker then shows a "Kaggle (your GPU)" group with the notebook's models).
+- Replies show speaker name, model tag, decider confidence (`Laya 92%` or `Jev 67%`; or a "Jev/Laya unavailable —
   default agent" warning), a "Saved to memory" tag, and a `🛠 wrote x · ran y`
   line when tools were used. "Ask another agent ▾" re-asks the same question.
 - UI copy is English; **error explanations are Thai** (`core/errors.py`), and the
@@ -73,6 +75,11 @@ one idea: *one conversation, many models, nobody needs to be told twice.*
 - **Ask before adding dependencies** (repo `CLAUDE.md`). Approved so far: Tauri
   (+ npm `@tauri-apps/cli`), Pi (`@earendil-works/pi-coding-agent`).
 - Marketing / landing is out of scope.
+- **Zero budget (2026-09-29):** the owner has no money and OpenRouter is negative. Chat models run on the owner's
+  free **Kaggle** GPU (Ollama: qwen3:8b, gemma3:12b, glm4:9b; the user starts a notebook run and pastes its URL);
+  **Laya** (open weights, CPU) replaces Jev on the owner's Mac. OpenJev and local chat models were rejected (hardware).
+  The architecture the owner has in mind: Colony → decider → Research / Code / Write "harnesses" (search/RAG,
+  Pi/tools, files) → different open-weight models. Rooms, Jev-style routing and shared context stay as they are.
 
 ## Users
 Single local user (owner first; later solo founders). No accounts. The API key

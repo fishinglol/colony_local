@@ -1,44 +1,45 @@
 # System Patterns — Colony Local
 
-All paths are relative to `local/`. Line counts as of 2026-09-26.
+All paths are relative to the repo root (`~/Desktop/Colony-Local`; this used to be `local/` inside ColonyBridge — old
+notes that say `local/x` mean `x`). Line counts as of 2026-09-29.
 
 ## File map
 ```
 pyproject.toml            package "colony-local"; script `colony = colony.cli:main`; package-data web/* + engine/*.ts
 colony/
-  cli.py (90)             `colony` command: --port --host --no-open --reload --exit-with-parent
+  cli.py (107)            `colony` command: --port --host --no-open --reload --exit-with-parent; _start_laya() (local decider)
   app.py (95)             FastAPI app factory; mounts /api, serves web/ with Cache-Control: no-cache; run()
-  config.py (113)         Settings (pydantic-settings, ~/.colony/.env); update_env_file()
+  config.py (125)         Settings (pydantic-settings, ~/.colony/.env); update_env_file()
   schemas.py (44)         MessageRequest (workspace_id, role_id, channel) / MessageResponse
   api/                    THIN routers, no logic. __init__.py mounts them under /api
     chat.py               /health /messages /context (all take/return workspace_id)
     workspaces.py         /workspaces (list, create, PATCH, DELETE) /workspaces/{id}/messages
-    agents.py             /roles?workspace_id= (GET, PUT) /models (whole catalog + capabilities) /models/test
+    agents.py             /roles?workspace_id= (GET, PUT) /models (Kaggle server's models first, then catalog + capabilities) /models/test
     tools.py              /approvals (GET) /approvals/{id} (POST) /models/tools
-    settings.py           /settings (GET, POST: API key only)
+    settings.py           /settings (GET, POST: OpenRouter key, Kaggle server URL)
     memory.py             /memory/summary /memory/context
     attachments.py        POST/GET /workspaces/{id}/attachments (JSON + base64 upload, no python-multipart)
     mcp.py                GET|PUT /mcp (connectors, secrets masked), POST /mcp/composio
     links.py              POST /open-url (open an http(s) link in the real browser)
   core/                   business logic
-    chat.py (173)         handle_message(): decide -> plan history -> (Pi | plain chat) -> persist
-    decider.py (82)       Jev call + visible fallback
+    chat.py (277)         handle_message(): decide -> plan history -> (Pi | plain chat) -> persist
+    decider.py (86)       who answers in # mix: Laya (LAYA_URL) or Jev (OpenRouter) + visible fallback
     workspaces.py         Workspace store (~/.colony/workspaces.json): team, folder, create/copy/rename/delete, first-run migration
     agents.py             Role, ToolAccess, DEFAULT_ROLES, validate_roles (no storage: roles live in a workspace)
     context.py (145)      shared-context planning, token estimates, OpenRouter catalog cache, supports_tools
     models.py (88)        MODEL_POOL for the dropdown + per-model quirks
-    errors.py (33)        explain(): provider error -> Thai message
+    errors.py             explain(): provider error -> Thai message (+ _kaggle_hint for kaggle/ models)
     approvals.py (56)     in-memory "may I do this?" questions (blocking ask, polled resolve)
     compaction.py         summary of the older part of a long conversation (background, Pi-style format)
     attachments.py        uploaded files: save/get/render per model (text pasted, media parts if the model reads them), unreadable()
     mcp.py                connectors: MCP server list (~/.colony/mcp-servers.json), masking, Composio preset
     project_folder.py     explicit folder agents with tools may use (per workspace; otherwise chat-only)
   engine/
-    pi.py (209)           run_turn(): one agent turn through Pi RPC
+    pi.py (249)           run_turn(): one agent turn through Pi RPC (OpenRouter or the Kaggle URL in models.json)
     colony-gate.ts        Pi extension: per-tool allow/ask/off + workspace fence + the `mcp` tool rules (looking is free, calls ask, install/sign-in refused)
   llm/
     http.py (140)         the ONE HTTP layer (retries, ProviderError)
-    providers.py (225)    prompt building (system_messages/build_messages) + OpenRouter/OpenAI calls
+    providers.py (276)    prompt building (system_messages/build_messages) + calls; _endpoint(): kaggle/ → Kaggle, else OpenRouter; OpenAI fallback
   memory/                 long-term memory (files, recall, review, safety)
   store/                  history.json + JsonStore (atomic JSON file)
   web/                    static UI: index.html, app.css, js/*.js (ES modules, no build step)
@@ -49,7 +50,10 @@ colony/
 tests/                    pytest; conftest isolates every test (own DATA_DIR, MOCK_MODE)
 desktop/                  Tauri 2 native window (src-tauri/src/main.rs), dist/index.html loading page
 pi-runtime/               package.json pinning Pi + pi-mcp-adapter; `npm install` puts the `pi` binary here; colony-mcp.ts = isolated-config wrapper for the adapter
+laya-runtime/             requirements.txt (Intel-Mac pins) + serve.py (runs laya-serve, dies when Colony's stdin closes); .venv (ignored)
+kaggle/                   colony_server.py (+ .ipynb for Kaggle's File → Import): Ollama + models + cloudflared on a Kaggle GPU
 spike-pi/                 throwaway experiment + evidence (README inside); run/ and node_modules are ignored
+memory-bank/              these notes; docs/ = the original handoff log + restructure spec
 ```
 
 ## Key patterns
@@ -71,13 +75,19 @@ decider never stalls chat. `core/errors.explain()` maps status → Thai advice
 400 context length, 400/404 unknown model, 5xx, network). Errors are shown but
 **never persisted** into history.
 
-### 3. Jev decider (`core/decider.py`)
-`POST https://openrouter.ai/api/alpha/decisions`, model `typesafe/jev-1.13`.
-Request: `state.message` + `questions.role` = a `choice` question whose criteria
-are `{role_id: role.when}`. Response: `answers.role.{choice, confidence}`
-(NOT `decisions` — that bug once made Jev never work). `decided_by` is one of
-`jev | direct | only_role | fallback`; `fallback` = first agent, and the UI says
-so. Direct chats (`role_id` set) skip Jev entirely.
+### 3. Decider: Laya or Jev (`core/decider.py`)
+One request shape for both (Jev's "System One" protocol): `state.message` + `questions.role` = a `choice` question
+whose criteria are `{role_id: role.when}`. Response: `answers.role.{choice, confidence}` (NOT `decisions` — that bug
+once made Jev never work).
+- **Laya** (preferred; `LAYA_URL` set): `POST {LAYA_URL}/v1/systemone`, model `multilingual` (the checkpoint that reads
+  Thai), no key. Open weights (Apache-2.0, ~322M, non-generative), runs on CPU on the owner's Mac. `cli._start_laya()`
+  launches `laya-runtime/.venv/bin/python laya-runtime/serve.py` in its own session (port 8790, env LAYA_DEVICE=cpu,
+  LAYA_MODELS=multilingual, LAYA_MAX_LOADED=1, LAYA_THREADS=2; log `~/.colony/laya.log`) with a stdin pipe it never
+  closes, and sets `LAYA_URL`; `serve.py` kills its own process group when that pipe closes, so Laya dies with Colony
+  even on SIGKILL (atexit alone left orphans — found by testing). Skipped if `LAYA_URL` is already set or no venv.
+- **Jev** (`LAYA_URL` unset, OpenRouter key set): `POST https://openrouter.ai/api/alpha/decisions`, `typesafe/jev-1.13`.
+- `decided_by` ∈ `laya | jev | direct | only_role | fallback`; `fallback` = first agent, the UI says
+  "Jev/Laya unavailable". Direct chats (`role_id` set) skip the decider. `retries=0`, 10 s timeout.
 
 ### 3b. Workspaces (`core/workspaces.py`) — the top level
 A **workspace** = its own team of agents (`roles`, each with its own model/tools), **one continuous
@@ -170,6 +180,29 @@ Tests patch `compaction.complete_chat`.
 - Per-agent narrowing: `ToolAccess.mcp_servers` filters `mcp.enabled_for_pi()` in `chat.connectors_for(role)`; `mcp_apps` adds "use only these apps" to the system prompt when Composio is allowed.
 - Tests: `tests/test_mcp.py` (real Pi + adapter + `tests/fake_mcp.py` stdio/HTTP; skipped if pi-runtime lacks the adapter), `tests/test_web_search.py`; `fake_llm.py` understands `MCP`, `MCPSEARCH`, `MCPINSTALL`.
 
+### 4g. Kaggle provider (the owner's own GPU) — `llm/providers.py`, `engine/pi.py`, `kaggle/`
+- A model id `kaggle/<name>` (e.g. `kaggle/qwen3:8b`) means "the model `<name>` on the Ollama server behind
+  `KAGGLE_BASE_URL`" (the notebook's cloudflared tunnel + `/v1`). `providers._endpoint(settings, model)` returns
+  (URL, headers, provider name, id to send); every call site uses it: `generate_openrouter_reply` (drops the OpenRouter-only
+  `reasoning` and web `plugins` fields), `ping_model` (full timeout: the first request loads the model), `complete_chat`
+  (when `OPENROUTER_ROUTING_MODEL` is a `kaggle/` id). No key is sent. `chat.handle_message` doesn't demand an OpenRouter
+  key for a `kaggle/` agent and never adds `:online`.
+- Pi: for a `kaggle/` model `run_turn` writes the Kaggle URL (apiKey "kaggle", ignored by Ollama) and the bare model name
+  into `models.json`.
+- `context.context_window` returns `KAGGLE_CONTEXT_WINDOW` (16384) for `kaggle/` ids — must equal the notebook's
+  `OLLAMA_CONTEXT_LENGTH`, or Ollama silently cuts the prompt. Tools/inputs/reasoning are "unknown" (= allowed).
+- `/api/models` asks `{KAGGLE_BASE_URL}/models` (5 s, errors ignored) and lists those first as "Kaggle (your GPU)".
+  `/api/settings` stores `KAGGLE_BASE_URL` (accepts with/without `/v1`; must start with http(s)://; "" clears).
+  The Settings modal (`#fKaggle`) saves it and reloads the model list.
+- Errors: `errors._kaggle_hint` — 401 = no URL set, 400/404 = model not pulled, anything else = "the notebook has probably
+  stopped: run it again and paste the new URL" (Thai).
+- The notebook (`kaggle/colony_server.py`): writes `/tmp/setup.sh` and runs it in the background (own session); it installs
+  Ollama from the tarball (NOT install.sh), starts `ollama serve` (OLLAMA_CONTEXT_LENGTH, OLLAMA_MAX_LOADED_MODELS=3,
+  OLLAMA_KEEP_ALIVE=-1), pulls + preloads each model (`/api/generate` with only `model`), starts cloudflared
+  (`--http-host-header localhost:11434`), appending lines to `/tmp/colony-status.txt`. The cell loop prints those lines,
+  "… N s, X GB of models so far" every 15 s, then the URL (found with `startswith/endswith`, no regex), then a heartbeat
+  every 5 min. `.ipynb` = the same source as one cell, regenerated from the `.py` by a tiny script (keep them in sync).
+
 ### 5. Prompt building is split on purpose
 `providers.system_messages()` = identity + role + team note + memory context;
 `build_messages()` = those + history + the new message (plain chat).
@@ -201,9 +234,9 @@ prompt-injection *phrases* by plain-text matching (no regex; deliberately not
   message: …"); system prompt = `system_messages()` + `TOOLS_NOTE`, written to
   `~/.colony/pi-agent/system-prompt.md`.
 - Pi config lives in `~/.colony/pi-agent/` (`PI_CODING_AGENT_DIR`): a generated
-  `models.json` with provider `colony` (OpenRouter base URL, the key — file mode
-  0600 — and just the one model id), so **any** OpenRouter id works even if Pi's
-  bundled catalog lacks it.
+  `models.json` with provider `colony` (OpenRouter base URL + the key, or the Kaggle URL for `kaggle/` models — file
+  mode 0600 — and just the one model id), so **any** model id works even if Pi's bundled catalog lacks it.
+  Verified on Kaggle: qwen3:8b calls tools; glm4:9b does not (answers with code instead).
 - **Locked-down launch:** `--no-context-files --no-skills --no-prompt-templates
   --no-themes --no-extensions --no-approve` (only our `-e colony-gate.ts` loads);
   environment = PATH/HOME/USER/LANG/LC_ALL/TMPDIR/SHELL + `PI_*` + `COLONY_*`
@@ -252,13 +285,15 @@ SIGTERMs itself when it closes — so the server dies even if the window is
 force-quit (signals alone left it orphaned; found by testing). The window shows
 `dist/index.html` ("Starting Colony…") then navigates to the server; failures
 are written into that page. Server command lookup: `$COLONY_BIN` →
-`local/.venv/bin/colony` → PATH.
+`<repo>/.venv/bin/colony` (via CARGO_MANIFEST_DIR/../../) → PATH. Because the window runs the `colony` command,
+Laya starts with it too.
 
 ## On-disk data (`~/.colony/`, or `$DATA_DIR`)
-`.env` (OPENROUTER_API_KEY; WORKSPACE_DIR only read once by the migration), `workspaces.json`
+`.env` (OPENROUTER_API_KEY, KAGGLE_BASE_URL; WORKSPACE_DIR only read once by the migration), `workspaces.json`
 (workspaces + their teams; `roles.json` is the legacy file, ignored after migration), `history.json`
 (one conversation per workspace), `self_improve/<workspace id>/…` (memory), `pi-agent/` (models.json, system-prompt.md,
-Pi's own files). Writes go through `JsonStore` (atomic temp-file + replace).
+Pi's own files), `laya.log`. Writes go through `JsonStore` (atomic temp-file + replace). Laya's weights live in the
+Hugging Face cache (`~/.cache/huggingface`, ~1.3 GB).
 
 ## Testing conventions
 - `tests/conftest.py` autouse fixture: own `DATA_DIR`, `MOCK_MODE=true`, empty keys.
@@ -271,7 +306,11 @@ Pi's own files). Writes go through `JsonStore` (atomic temp-file + replace).
 - `tests/test_engine.py`: a fake `pi` program (Python script speaking Pi's RPC
   protocol) tests Colony's side; four tests run the **real Pi** against
   `tests/fake_llm.py` (OpenAI-compatible fake) and are skipped if
-  `local/pi-runtime` isn't installed.
+  `pi-runtime` isn't installed.
+- `tests/test_kaggle.py`: a tiny non-streaming fake Ollama (`/v1/models`, `/v1/chat/completions`) checks routing,
+  missing fields, errors, context size, chat with no OpenRouter key, Settings + picker; plus a real-Pi turn against
+  `fake_llm.py` with a `kaggle/` model. `test_decider.py` covers Laya (URL, no auth, model `multilingual`, fallback).
+  (`fake_llm.py` only streams — plain chat needs the non-streaming fake.)
 - `tests/test_attachments.py` (files, capability filter, modes), `test_compaction.py` (patch `compaction.complete_chat`), `test_web_search.py`, `test_mcp.py` (store + REAL Pi + adapter
   against `tests/fake_mcp.py`, a dependency-free MCP server over stdio or HTTP; skipped if the adapter isn't installed). `fake_llm.py` understands `MCP`, `MCPSEARCH`, `MCPINSTALL`.
 - `test_web.py`: every `$('id')` used by the JS exists in index.html, and every script passes `node --check` (a single unescaped quote once blanked the page).
@@ -294,3 +333,10 @@ Pi's own files). Writes go through `JsonStore` (atomic temp-file + replace).
 - `logos.composio.dev/api/<slug>` answers **200 with a generic placeholder** for unknown slugs: compare the image, not the status, when adding logo slugs.
 - The preview screenshot tool often shows the previous frame: wait a second and screenshot again before judging a UI.
 - Writing a new `history.json` message field (`attachments`) or conversation field (`compaction`) is safe: the store keeps unknown keys and readers use `.get`.
+- **Laya on an Intel Mac:** PyTorch's last Intel-Mac build is 2.2.2 (Python ≤ 3.12) and transformers 5 won't run on it
+  (`NameError: nn`) → Python 3.11 + transformers <5 + numpy <2. `laya.Router` takes `default=`/`model=`, not `subfolder=`.
+  Running `laya-serve --help` STARTS the server (no help flag).
+- **A child started from `colony` must die with it:** `atexit` + `terminate()` left Laya (and its worker processes)
+  running after Colony was stopped → stdin-pipe lifeline + `killpg`, same idea as the desktop shell.
+- **Kaggle:** see activeContext "Kaggle lessons" (use Save & Run All with GPU; never Ollama's install.sh; import makes a
+  CPU run you must cancel; the editor is a cross-origin iframe).

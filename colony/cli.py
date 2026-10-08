@@ -27,6 +27,30 @@ def _stop_when_stdin_closes() -> None:
     threading.Thread(target=watch, daemon=True).start()
 
 
+LAYA_PORT = 8790
+
+
+def _start_laya() -> None:
+    """Run the local Laya decider next to the server when laya-runtime/ is installed (see its requirements.txt)."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    runtime = Path(__file__).resolve().parent.parent / "laya-runtime"
+    python = runtime / ".venv" / "bin" / "python"
+    if os.environ.get("LAYA_URL") or not python.exists():
+        return
+    env = {**os.environ, "LAYA_HOST": "127.0.0.1", "LAYA_PORT": str(LAYA_PORT), "LAYA_DEVICE": "cpu",
+           "LAYA_MODELS": "multilingual", "LAYA_MAX_LOADED": "1", "LAYA_THREADS": "2", "LAYA_LOG_LEVEL": "warning"}
+    log = open(Path.home() / ".colony" / "laya.log", "w")
+    # The pipe on stdin is Laya's lifeline: it stops when this process ends, however it ends (runtime/serve.py).
+    # Deliberately never closed or waited on.
+    subprocess.Popen([str(python), str(runtime / "serve.py")], env=env, stdin=subprocess.PIPE,
+                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    os.environ["LAYA_URL"] = f"http://127.0.0.1:{LAYA_PORT}"
+    print(f"🧭  Laya (who answers in # mix) starting on port {LAYA_PORT} …")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="colony",
@@ -62,6 +86,7 @@ def main() -> None:
         os.environ["PORT"] = str(args.port)
     from .config import ensure_env_file, get_settings
     ensure_env_file()
+    _start_laya()
 
     if not args.no_open:
         import threading

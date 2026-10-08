@@ -90,10 +90,12 @@ function addAgent(text, meta, iso, question, files = []) {
   const msg = el('div', 'msg'), col = el('div', 'msg-col'), head = el('div', 'msg-head');
   head.append(el('span', 'msg-name', meta.role_name || 'AI'), el('span', 'msg-time', timeOf(iso)));
   if (meta.model && meta.model !== 'none') head.append(el('span', 'tag', shortModel(meta.model)));
-  if (meta.decided_by === 'jev') head.append(el('span', 'tag jev', `Jev ${Math.round((meta.confidence || 0) * 100)}%`));
+  if (meta.decided_by === 'jev' || meta.decided_by === 'laya') {
+    head.append(el('span', 'tag jev', `${meta.decided_by === 'jev' ? 'Jev' : 'Laya'} ${Math.round((meta.confidence || 0) * 100)}%`));
+  }
   if (meta.decided_by === 'fallback') {
-    const t = el('span', 'tag warn', 'Jev unavailable — default agent');
-    t.title = 'Jev could not be reached, so the first agent answered.'; head.append(t);
+    const t = el('span', 'tag warn', 'Jev/Laya unavailable — default agent');
+    t.title = 'The decider (Jev or Laya) could not be reached, so the first agent answered.'; head.append(t);
   }
   if (meta.memory_saved) head.append(el('span', 'tag mem', 'Saved to memory'));
   const body = el('div', 'md'); body.innerHTML = renderMarkdown(text);

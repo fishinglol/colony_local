@@ -5,6 +5,7 @@ HTTP itself (SSL, retries, error handling) lives in llm/http.py.
 """
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 from ..config import Settings
 from ..core.models import accepts_temperature
@@ -12,6 +13,7 @@ from .http import ProviderError, post_json
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
+KAGGLE_PREFIX = "kaggle/"          # "kaggle/qwen3:8b" = the model "qwen3:8b" on the user's own Kaggle server
 MEMORY_SAVE_PREFIX = "MEMORY_SAVE:"
 
 _SYSTEM_PROMPT = (
@@ -49,8 +51,10 @@ def _identity_system_message(model: str) -> dict:
     return {
         "role": "system",
         "content": (
-            f'You are currently being served as the model "{model}" via OpenRouter. '
-            "If asked what model, LLM, or version you are, state this exact identity."
+            f'You are currently being served as the model "{model}". '
+            "If asked what model, LLM, or version you are, state this exact identity. "
+            f"Right now it is {datetime.now().astimezone().strftime('%A %Y-%m-%d %H:%M')} (the user's local time): "
+            "use it for anything about today, deadlines or what is overdue."
         ),
     }
 
@@ -113,6 +117,22 @@ def openrouter_headers(settings: Settings) -> dict:
     }
 
 
+def is_kaggle(model: str) -> bool:
+    return model.startswith(KAGGLE_PREFIX)
+
+
+def _endpoint(settings: Settings, model: str) -> tuple[str, dict, str, str]:
+    """(chat-completions URL, headers, provider name, model id to send) for a model id."""
+    if is_kaggle(model):
+        if not settings.kaggle_base_url:
+            raise ProviderError("ยังไม่ได้ใส่ URL ของ Kaggle server ใน Settings", status=401)
+        return (f"{settings.kaggle_base_url}/chat/completions", {"Content-Type": "application/json"},
+                "Kaggle", model[len(KAGGLE_PREFIX):])
+    if not settings.openrouter_api_key:
+        raise ProviderError("OPENROUTER_API_KEY is not configured.", status=401)
+    return f"{OPENROUTER_BASE}/chat/completions", openrouter_headers(settings), "OpenRouter", model
+
+
 def openai_headers(settings: Settings) -> dict:
     return {"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"}
 
@@ -163,47 +183,41 @@ def generate_openrouter_reply(
     reasoning: dict | None = None,     # OpenRouter's `reasoning` field; None = the model's own default
     web_search: bool = False,          # let OpenRouter search the web for this request
 ) -> ProviderResult:
-    if not settings.openrouter_api_key:
-        raise ProviderError("OPENROUTER_API_KEY is not configured.")
-
     model = model_hint if "/" in model_hint else settings.openrouter_default_model
+    url, headers, provider, send_as = _endpoint(settings, model)
     payload: dict = {
-        "model": model,
+        "model": send_as,
         "messages": build_messages(model, message, role_name, role_instructions, memory_context, history, attributed_history, earlier_summary),
         "max_tokens": settings.max_output_tokens,
     }
     if accepts_temperature(model):
         payload["temperature"] = 0.7
-    if reasoning:
-        payload["reasoning"] = reasoning
-    if web_search:
-        payload["plugins"] = [WEB_PLUGIN]
+    if provider == "OpenRouter":         # OpenRouter-only fields; a Kaggle server doesn't know them
+        if reasoning:
+            payload["reasoning"] = reasoning
+        if web_search:
+            payload["plugins"] = [WEB_PLUGIN]
 
-    data = post_json(
-        f"{OPENROUTER_BASE}/chat/completions", payload, openrouter_headers(settings),
-        settings.openrouter_timeout_seconds, "OpenRouter", retries=settings.chat_retries,
-    )
-    return _result(data, _extract_text(data, "OpenRouter"), model)
+    data = post_json(url, payload, headers, settings.openrouter_timeout_seconds, provider, retries=settings.chat_retries)
+    return _result(data, _extract_text(data, provider), model)
 
 
 def ping_model(*, settings: Settings, model: str, reasoning: dict | None = None) -> tuple[str, float]:
     """One tiny real request to `model`, no retries. Returns (reply preview, seconds).
     Raises ProviderError if the model can't be used — the point of the "Test this model" button."""
-    if not settings.openrouter_api_key:
-        raise ProviderError("OPENROUTER_API_KEY is not configured.", status=401)
+    url, headers, provider, send_as = _endpoint(settings, model)
     payload: dict = {
-        "model": model,
+        "model": send_as,
         "messages": [{"role": "user", "content": "Reply with the single word: OK"}],
         "max_tokens": 64,
     }
-    if reasoning:
+    if reasoning and provider == "OpenRouter":
         payload["reasoning"] = reasoning
     started = time.monotonic()
-    data = post_json(
-        f"{OPENROUTER_BASE}/chat/completions", payload, openrouter_headers(settings),
-        min(settings.openrouter_timeout_seconds, 60.0), "OpenRouter", retries=0,
-    )
-    return _extract_text(data, "OpenRouter")[:60], time.monotonic() - started
+    # A Kaggle server loads the model into the GPU on its first request, which can take a minute or two.
+    timeout = settings.openrouter_timeout_seconds if provider == "Kaggle" else min(settings.openrouter_timeout_seconds, 60.0)
+    data = post_json(url, payload, headers, timeout, provider, retries=0)
+    return _extract_text(data, provider)[:60], time.monotonic() - started
 
 
 def generate_openai_reply(
@@ -240,6 +254,11 @@ def complete_chat(
     """Minimal single-turn completion for internal tasks (memory review).
     OpenRouter primary, OpenAI fallback."""
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+    if is_kaggle(settings.openrouter_routing_model) and settings.kaggle_base_url:
+        url, headers, provider, send_as = _endpoint(settings, settings.openrouter_routing_model)
+        payload = {"model": send_as, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        data = post_json(url, payload, headers, settings.openrouter_timeout_seconds, provider)
+        return _extract_text(data, provider)
     if settings.openrouter_api_key:
         payload: dict = {
             "model": settings.openrouter_routing_model, "messages": messages,

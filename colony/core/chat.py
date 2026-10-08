@@ -21,8 +21,11 @@ from ..llm.providers import (
     ProviderError,
     generate_openai_reply,
     generate_openrouter_reply,
+    is_kaggle,
     system_messages,
 )
+from ..llm.ollama import is_ollama, generate_ollama_chat
+from .agent_loop import run_agent_loop
 from ..schemas import MessageRequest, MessageResponse
 from ..store.history import append_exchange
 from . import attachments, compaction, mcp
@@ -175,12 +178,35 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     if settings.mock_mode:
         reply_text = f"[mock] {role.name} ({role.model}) — {text[:80]}" + (f" [+{len(refs)} file(s)]" if refs else "")
         actual_model = role.model
-    elif not (settings.openrouter_api_key or settings.openai_api_key):
+    elif not (settings.openrouter_api_key or settings.openai_api_key or is_kaggle(role.model) or is_ollama(role.model)):
         return MessageResponse(
             workspace_id=workspace_id, message_id=f"msg_{uuid4().hex}",
             reply="⚠️ ยังไม่ได้ตั้งค่า API key — เปิด Settings แล้วใส่ OpenRouter key ก่อนนะ",
             model="none", created_at=_now(), **meta,
         )
+    elif is_ollama(role.model):
+        from ..llm.providers import build_messages
+        messages = build_messages(
+            role.model, full_text, role.name, role.instructions, memory_context,
+            plan.history, plan.attributed, earlier_summary,
+        )
+        if tools.any_on:
+            loop_res = run_agent_loop(
+                model=role.model,
+                messages=messages,
+                settings=settings,
+                folder=folder,
+                agent_name=role.name,
+                tools_enabled=True,
+            )
+            reply_text, actual_model, actions = loop_res.reply, role.model, loop_res.actions
+        else:
+            chat_res = generate_ollama_chat(
+                model=role.model,
+                messages=messages,
+                settings=settings,
+            )
+            reply_text, actual_model = chat_res.text, role.model
     elif tools.any_on:
         # An agent with tools runs through Pi; agents without tools take the plain chat path below.
         def refuse(reply: str) -> MessageResponse:
@@ -202,7 +228,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
         level = reasoning_param(role.model, role.reasoning, settings)
         try:
             result = run_turn(
-                settings=settings, model=role.model + (":online" if role.web_search else ""), system_prompt=system,
+                settings=settings, model=role.model + (":online" if role.web_search and not is_kaggle(role.model) else ""), system_prompt=system,
                 thinking=None if level is None else ("off" if level["effort"] == "none" else level["effort"]),
                 prompt=transcript_prompt(plan.history, full_text), tools=tools, mcp_servers=connectors_for(role),
                 workspace=folder or _no_folder_dir(settings),
@@ -218,10 +244,11 @@ def handle_message(request: MessageRequest) -> MessageResponse:
             return refuse(explain(exc, role.model))
         reply_text, actual_model, actions = result.text, role.model, result.actions
     else:
-        generate = generate_openrouter_reply if settings.openrouter_api_key else generate_openai_reply
+        via_openrouter = bool(settings.openrouter_api_key) or is_kaggle(role.model)
+        generate = generate_openrouter_reply if via_openrouter else generate_openai_reply
         # OpenRouter takes the agent's reasoning level; the OpenAI fallback has no such setting.
         extra = {"reasoning": reasoning_param(role.model, role.reasoning, settings), "web_search": role.web_search} \
-            if settings.openrouter_api_key else {}
+            if via_openrouter else {}
         instructions = role.instructions
         if not folder and role.tools.any_on:
             instructions += "\n\nThis workspace has no project folder, so this is chat only. Do not claim to read, edit, or run anything on the user's computer."

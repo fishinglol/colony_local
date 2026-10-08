@@ -8,8 +8,8 @@ from ..core.context import model_catalog, reasoning_param, supports_tools
 from ..core.errors import explain
 from ..core.models import MODEL_POOL, PROVIDER_NAMES, known_context_window
 from ..core.workspaces import WorkspaceNotFound, get_workspace, save_roles
-from ..llm.http import ProviderError
-from ..llm.providers import ping_model
+from ..llm.http import ProviderError, get_json
+from ..llm.providers import KAGGLE_PREFIX, ping_model
 
 router = APIRouter()
 
@@ -51,11 +51,29 @@ def _capabilities(info: dict | None, context: int | None) -> dict:
             "reasoning_levels": info.get("reasoning_levels"), "context": info.get("context") or context}
 
 
+def _kaggle_models(settings) -> list[dict]:
+    """The models the user's Kaggle server has pulled (empty when no URL is set or the notebook is off)."""
+    if not settings.kaggle_base_url or settings.mock_mode:
+        return []
+    try:
+        data = get_json(f"{settings.kaggle_base_url}/models", timeout=5.0, provider_name="Kaggle")
+    except ProviderError:
+        return []
+    ids = [m["id"] for m in data.get("data") or [] if isinstance(m, dict) and isinstance(m.get("id"), str)]
+    return [{
+        "id": KAGGLE_PREFIX + model_id, "provider": "kaggle", "provider_name": "Kaggle (your GPU)",
+        "label": model_id, "note": "Free", "suggested": False,
+        "capabilities": {"tools": None, "inputs": None, "reasoning": None, "reasoning_levels": None,
+                         "context": settings.kaggle_context_window},
+    } for model_id in ids]
+
+
 @router.get("/models")
 def get_models() -> dict:
     """Every model the picker can offer: our suggested list first, then everything OpenRouter lists.
     Each carries its capabilities (files/tools, images, video, reasoning, context) when the catalog is reachable."""
-    catalog = model_catalog(get_settings())
+    settings = get_settings()
+    catalog = model_catalog(settings)
     models = [
         {
             "id": m.model_id, "provider": m.provider, "provider_name": PROVIDER_NAMES.get(m.provider, m.provider),
@@ -64,6 +82,7 @@ def get_models() -> dict:
         }
         for m in MODEL_POOL
     ]
+    models = _kaggle_models(settings) + models
     listed = {m["id"] for m in models}
     for model_id, info in sorted(catalog.items(), key=lambda item: item[0]):
         if model_id in listed:

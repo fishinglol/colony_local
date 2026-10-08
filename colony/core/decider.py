@@ -11,7 +11,9 @@ API (https://openrouter.ai/docs/guides/community/jev-tutorial):
   response: {"answers": {"role": {"choice", "confidence", "probabilities"}}, ...}
 
 Auth: the existing openrouter_api_key.
+With LAYA_URL set, the same request goes to a local Laya server (POST /v1/systemone) instead.
 """
+import json
 import logging
 from dataclasses import dataclass
 
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 class DeciderResult:
     role: Role
     confidence: float   # Jev's confidence for the chosen role (0–1)
-    source: str         # "jev" | "direct" | "only_role" | "fallback"
+    source: str         # "jev" | "laya" | "direct" | "only_role" | "fallback"
 
 
 def decide(message: str, roles: list[Role], settings: Settings, direct_role: Role | None = None) -> DeciderResult:
@@ -41,11 +43,22 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
         return DeciderResult(role=direct_role, confidence=1.0, source="direct")
     if len(roles) == 1:
         return DeciderResult(role=roles[0], confidence=1.0, source="only_role")
-    if not settings.openrouter_api_key:
+    if settings.laya_url:
+        # Laya speaks Jev's protocol; "multilingual" is its checkpoint that reads Thai.
+        url, headers, model, source = (f"{settings.laya_url}/v1/systemone", {"Content-Type": "application/json"},
+                                       "multilingual", "laya")
+    elif settings.openrouter_api_key:
+        url, headers, model, source = settings.jev_decisions_url, openrouter_headers(settings), settings.jev_model, "jev"
+    else:
+        ollama_res = decide_via_ollama(message, roles, settings)
+        if ollama_res:
+            role_id, conf = ollama_res
+            role = next(r for r in roles if r.id == role_id)
+            return DeciderResult(role=role, confidence=conf, source="nemotron")
         return DeciderResult(role=roles[0], confidence=0.0, source="fallback")
 
     payload = {
-        "model": settings.jev_model,
+        "model": model,
         "state": {"message": message[:2000]},
         "questions": {
             "role": {
@@ -57,17 +70,14 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
     }
     try:
         # retries=0: Jev sits on the hot path of every message, so fail fast and fall back.
-        data = post_json(
-            settings.jev_decisions_url, payload, openrouter_headers(settings),
-            timeout=10.0, provider_name="Jev", retries=0,
-        )
+        data = post_json(url, payload, headers, timeout=10.0, provider_name=source.capitalize(), retries=0)
         role_id, confidence = parse_jev_answer(data, [r.id for r in roles])
     except (ProviderError, KeyError, ValueError, TypeError) as exc:
-        logger.warning("Jev decider failed (%s) — falling back to first agent", exc)
+        logger.warning("%s decider failed (%s) — falling back to first agent", source, exc)
         return DeciderResult(role=roles[0], confidence=0.0, source="fallback")
 
     role = next(r for r in roles if r.id == role_id)
-    return DeciderResult(role=role, confidence=confidence, source="jev")
+    return DeciderResult(role=role, confidence=confidence, source=source)
 
 
 def parse_jev_answer(data: dict, role_ids: list[str]) -> tuple[str, float]:
@@ -80,3 +90,36 @@ def parse_jev_answer(data: dict, role_ids: list[str]) -> tuple[str, float]:
     if not isinstance(confidence, (int, float)):
         confidence = (answer.get("probabilities") or {}).get(choice, 0.0)
     return str(choice), float(confidence)
+
+
+def decide_via_ollama(message: str, roles: list[Role], settings: Settings) -> tuple[str, float] | None:
+    """Use nemotron-3-nano:30b via Ollama to pick the best role."""
+    from ..llm.ollama import generate_ollama_chat
+    prompt = (
+        "You are an intent routing decider in a multi-agent chat system.\n"
+        "Select the single best teammate to answer the user's message based on their rules.\n\n"
+        "Teammates:\n"
+        + "\n".join(f"- ID '{r.id}' ({r.name}): When to answer -> {r.when}" for r in roles)
+        + f"\n\nUser message: {message[:1000]}\n\n"
+        "Return ONLY a JSON object with this exact shape: {\"role_id\": \"<chosen_id>\", \"confidence\": 0.95}"
+    )
+    try:
+        reply = generate_ollama_chat(
+            model="nemotron-3-nano:30b",
+            messages=[{"role": "user", "content": prompt}],
+            settings=settings,
+            timeout=8.0,
+        )
+        text = reply.text.strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1:
+            parsed = json.loads(text[start : end + 1])
+            chosen_id = parsed.get("role_id")
+            if any(r.id == chosen_id for r in roles):
+                conf = float(parsed.get("confidence", 0.9))
+                return chosen_id, conf
+    except Exception as exc:
+        logger.debug("Ollama decider failed: %s", exc)
+    return None
+
