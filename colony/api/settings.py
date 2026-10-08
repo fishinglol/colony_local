@@ -48,17 +48,17 @@ def update_settings_endpoint(payload: SettingsUpdateRequest) -> dict:
     updates: dict[str, str] = {}
     if payload.openrouter_api_key is not None and payload.openrouter_api_key.strip():
         updates["OPENROUTER_API_KEY"] = payload.openrouter_api_key.strip()
-    if payload.kaggle_base_url is not None:
+    if payload.kaggle_base_url is not None and payload.kaggle_base_url.strip():
         updates["KAGGLE_BASE_URL"] = _kaggle_url(payload.kaggle_base_url)
     if payload.ollama_base_url is not None and payload.ollama_base_url.strip():
         updates["OLLAMA_BASE_URL"] = payload.ollama_base_url.strip().rstrip("/")
-    if payload.ollama_api_key is not None:
+    if payload.ollama_api_key is not None and payload.ollama_api_key.strip():
         updates["OLLAMA_API_KEY"] = payload.ollama_api_key.strip()
     if payload.openclaw_gateway_enabled is not None:
         updates["OPENCLAW_GATEWAY_ENABLED"] = "true" if payload.openclaw_gateway_enabled else "false"
     if payload.openclaw_gateway_url is not None and payload.openclaw_gateway_url.strip():
         updates["OPENCLAW_GATEWAY_URL"] = payload.openclaw_gateway_url.strip().rstrip("/")
-    if payload.openclaw_gateway_token is not None:
+    if payload.openclaw_gateway_token is not None and payload.openclaw_gateway_token.strip():
         updates["OPENCLAW_GATEWAY_TOKEN"] = payload.openclaw_gateway_token.strip()
     if updates:
         try:

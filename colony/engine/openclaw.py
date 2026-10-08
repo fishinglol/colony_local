@@ -62,14 +62,14 @@ def is_openclaw_available(settings: Settings | None = None) -> bool:
     s = settings or get_settings()
     if not s.openclaw_gateway_enabled:
         return False
-    url = s.openclaw_gateway_url.rstrip("/")
+    url = f"{s.openclaw_gateway_url.rstrip('/')}/health"
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=0.8) as resp:
-            return True
-    except urllib.error.HTTPError:
-        # Server is running and responding (e.g. 503 preparing, 401 auth, 200)
-        return True
+            code = getattr(resp, "status", getattr(resp, "code", 200))
+            return code in (200, 204)
+    except urllib.error.HTTPError as exc:
+        return exc.code in (200, 204)
     except Exception:
         return False
 

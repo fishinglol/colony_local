@@ -189,7 +189,13 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     if settings.mock_mode:
         reply_text = f"[mock] {role.name} ({role.model}) — {text[:80]}" + (f" [+{len(refs)} file(s)]" if refs else "")
         actual_model = role.model
-    elif settings.openclaw_gateway_enabled and openclaw.is_openclaw_available(settings):
+    elif (
+        settings.openclaw_gateway_enabled
+        and openclaw.is_openclaw_available(settings)
+        and not is_kaggle(role.model)
+        and not is_ollama(role.model)
+        and (role.model.startswith("openclaw/") or not (settings.openrouter_api_key or settings.openai_api_key))
+    ):
         try:
             openclaw_res = openclaw.run_openclaw_turn(
                 settings=settings,

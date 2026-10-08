@@ -40,30 +40,64 @@ export async function checkOpenClawGateway() {
 export async function openSettings() {
   const s = await api('/settings');
   $('fKey').value = '';
-  $('fKaggle').value = s.kaggle_base_url;
+  $('fKaggle').value = s.kaggle_base_url || '';
   $('fOllamaUrl').value = s.ollama_base_url || '';
   $('fOllamaKey').value = '';
   $('fOpenclawUrl').value = s.openclaw_gateway_url || '';
   $('fOpenclawToken').value = '';
-  $('keyStatus').textContent = s.has_openrouter_key ? `Current key: ${s.openrouter_key_masked}` : 'No key set yet.';
-  $('ollamaKeyStatus').textContent = s.has_ollama_key ? `Current key: ${s.ollama_key_masked}` : 'No key set.';
-  $('openclawTokenStatus').textContent = s.has_openclaw_token ? `Current token: ${s.openclaw_token_masked}` : 'No token set (optional).';
+
+  if (s.has_openrouter_key) {
+    $('keyStatus').innerHTML = `<span style="color:var(--ok, #3fb950);font-weight:600">🟢 บันทึกแล้ว (Saved):</span> <code>${s.openrouter_key_masked}</code>`;
+    $('fKey').placeholder = '•••••••••••••••• (เว้นว่างไว้เพื่อใช้ Key เดิม)';
+  } else {
+    $('keyStatus').textContent = 'ยังไม่ได้ตั้งค่า Key (No key set yet)';
+    $('fKey').placeholder = 'sk-or-v1-…';
+  }
+
+  if (s.has_ollama_key) {
+    $('ollamaKeyStatus').innerHTML = `<span style="color:var(--ok, #3fb950);font-weight:600">🟢 บันทึกแล้ว (Saved):</span> <code>${s.ollama_key_masked}</code>`;
+    $('fOllamaKey').placeholder = '•••••••••••••••• (เว้นว่างไว้เพื่อใช้ Key เดิม)';
+  } else {
+    $('ollamaKeyStatus').textContent = 'ยังไม่ได้ตั้งค่า Key (No key set)';
+    $('fOllamaKey').placeholder = 'Bearer / API key if required';
+  }
+
+  if (s.has_openclaw_token) {
+    $('openclawTokenStatus').innerHTML = `<span style="color:var(--ok, #3fb950);font-weight:600">🟢 บันทึกแล้ว (Saved):</span> <code>${s.openclaw_token_masked}</code>`;
+    $('fOpenclawToken').placeholder = '•••••••••••••••• (เว้นว่างไว้เพื่อใช้ Token เดิม)';
+  } else {
+    $('openclawTokenStatus').textContent = 'ไม่ได้ระบุ Token (Optional)';
+    $('fOpenclawToken').placeholder = 'Bearer token if authentication is enabled';
+  }
+
   $('settingsError').textContent = '';
   openModal('settingsModal');
 }
 
 export async function saveSettings() {
   try {
+    const payload = {};
+    const keyVal = $('fKey').value.trim();
+    if (keyVal) payload.openrouter_api_key = keyVal;
+
+    const kaggleVal = $('fKaggle').value.trim();
+    if (kaggleVal) payload.kaggle_base_url = kaggleVal;
+
+    const ollamaUrlVal = $('fOllamaUrl').value.trim();
+    if (ollamaUrlVal) payload.ollama_base_url = ollamaUrlVal;
+
+    const ollamaKeyVal = $('fOllamaKey').value.trim();
+    if (ollamaKeyVal) payload.ollama_api_key = ollamaKeyVal;
+
+    const openclawUrlVal = $('fOpenclawUrl').value.trim();
+    if (openclawUrlVal) payload.openclaw_gateway_url = openclawUrlVal;
+
+    const openclawTokenVal = $('fOpenclawToken').value.trim();
+    if (openclawTokenVal) payload.openclaw_gateway_token = openclawTokenVal;
+
     await api('/settings', {
       method: 'POST',
-      body: JSON.stringify({
-        openrouter_api_key: $('fKey').value,
-        kaggle_base_url: $('fKaggle').value,
-        ollama_base_url: $('fOllamaUrl').value,
-        ollama_api_key: $('fOllamaKey').value,
-        openclaw_gateway_url: $('fOpenclawUrl').value,
-        openclaw_gateway_token: $('fOpenclawToken').value,
-      }),
+      body: JSON.stringify(payload),
     });
     closeModal('settingsModal'); toast('Saved'); refreshHealth();
     checkOpenClawGateway();
