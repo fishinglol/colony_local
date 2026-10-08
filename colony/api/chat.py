@@ -61,3 +61,11 @@ def get_activity_status(workspace_id: str | None = None) -> dict:
         ws_id = workspace_id or "local"
     from ..core.activity import get_activity
     return get_activity(ws_id)
+
+
+@router.get("/openclaw/status")
+def openclaw_status() -> dict:
+    """Check connectivity and health of OpenClaw Gateway."""
+    from ..engine.openclaw import get_openclaw_status
+    return get_openclaw_status(get_settings())
+

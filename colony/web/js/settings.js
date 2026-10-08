@@ -13,14 +13,41 @@ export async function refreshHealth() {
   return h;
 }
 
+export async function checkOpenClawGateway() {
+  const pill = $('openclawPill');
+  const dot = $('openclawDot');
+  const label = $('openclawLabel');
+  if (!pill || !dot || !label) return;
+
+  try {
+    const status = await api('/openclaw/status');
+    if (status.available) {
+      dot.className = 'openclaw-dot online';
+      label.textContent = 'OpenClaw Gateway 🟢';
+      pill.title = `OpenClaw Gateway Connected (${status.url})`;
+    } else {
+      dot.className = 'openclaw-dot offline';
+      label.textContent = 'OpenClaw Gateway 🔴';
+      pill.title = `OpenClaw Gateway Offline (${status.url}). Run 'pnpm openclaw gateway' in Terminal.`;
+    }
+  } catch {
+    dot.className = 'openclaw-dot offline';
+    label.textContent = 'OpenClaw Gateway 🔴';
+    pill.title = 'OpenClaw Gateway Offline';
+  }
+}
+
 export async function openSettings() {
   const s = await api('/settings');
   $('fKey').value = '';
   $('fKaggle').value = s.kaggle_base_url;
   $('fOllamaUrl').value = s.ollama_base_url || '';
   $('fOllamaKey').value = '';
+  $('fOpenclawUrl').value = s.openclaw_gateway_url || '';
+  $('fOpenclawToken').value = '';
   $('keyStatus').textContent = s.has_openrouter_key ? `Current key: ${s.openrouter_key_masked}` : 'No key set yet.';
   $('ollamaKeyStatus').textContent = s.has_ollama_key ? `Current key: ${s.ollama_key_masked}` : 'No key set.';
+  $('openclawTokenStatus').textContent = s.has_openclaw_token ? `Current token: ${s.openclaw_token_masked}` : 'No token set (optional).';
   $('settingsError').textContent = '';
   openModal('settingsModal');
 }
@@ -34,9 +61,12 @@ export async function saveSettings() {
         kaggle_base_url: $('fKaggle').value,
         ollama_base_url: $('fOllamaUrl').value,
         ollama_api_key: $('fOllamaKey').value,
+        openclaw_gateway_url: $('fOpenclawUrl').value,
+        openclaw_gateway_token: $('fOpenclawToken').value,
       }),
     });
     closeModal('settingsModal'); toast('Saved'); refreshHealth();
+    checkOpenClawGateway();
     state.modelPool = []; ensureModels();   // reload so the Kaggle/Ollama server's models show up in the picker
   } catch (err) { $('settingsError').textContent = err.message; }
 }

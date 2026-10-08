@@ -128,6 +128,11 @@ def _endpoint(settings: Settings, model: str) -> tuple[str, dict, str, str]:
             raise ProviderError("ยังไม่ได้ใส่ URL ของ Kaggle server ใน Settings", status=401)
         return (f"{settings.kaggle_base_url}/chat/completions", {"Content-Type": "application/json"},
                 "Kaggle", model[len(KAGGLE_PREFIX):])
+    if model.startswith("ollama/"):
+        from .ollama import normalize_ollama_model_id, ollama_headers
+        clean = normalize_ollama_model_id(model)
+        base = settings.ollama_base_url.rstrip("/")
+        return f"{base}/v1/chat/completions", ollama_headers(settings), "Ollama", clean
     if not settings.openrouter_api_key:
         raise ProviderError("OPENROUTER_API_KEY is not configured.", status=401)
     return f"{OPENROUTER_BASE}/chat/completions", openrouter_headers(settings), "OpenRouter", model
@@ -205,6 +210,16 @@ def generate_openrouter_reply(
 def ping_model(*, settings: Settings, model: str, reasoning: dict | None = None) -> tuple[str, float]:
     """One tiny real request to `model`, no retries. Returns (reply preview, seconds).
     Raises ProviderError if the model can't be used — the point of the "Test this model" button."""
+    if model.startswith("ollama/"):
+        from .ollama import generate_ollama_chat
+        started = time.monotonic()
+        res = generate_ollama_chat(
+            model=model,
+            messages=[{"role": "user", "content": "Reply with the single word: OK"}],
+            settings=settings,
+            timeout=10.0,
+        )
+        return (res.text or "OK")[:60], time.monotonic() - started
     url, headers, provider, send_as = _endpoint(settings, model)
     payload: dict = {
         "model": send_as,

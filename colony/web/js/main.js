@@ -8,7 +8,7 @@ import { initModelPicker, openModelPicker } from './model-picker.js';
 import { initMode } from './mode.js';
 import { $, closeModal } from './dom.js';
 import { autosize, closeMenu, send } from './feed.js';
-import { openMemory, openSettings, refreshHealth, saveSettings } from './settings.js';
+import { checkOpenClawGateway, openMemory, openSettings, refreshHealth, saveSettings } from './settings.js';
 import { selectTarget } from './sidebar.js';
 import { state } from './state.js';
 import { browseFolder, deleteWorkspace, loadWorkspaces, openFolderMenu, openWorkspace, openWorkspaceMenu, saveWorkspace } from './workspaces.js';
@@ -27,6 +27,7 @@ $('testModelBtn').onclick = testModel;
 $('deleteAgentBtn').onclick = deleteAgent;
 $('settingsBtn').onclick = openSettings;
 $('saveSettingsBtn').onclick = saveSettings;
+$('openclawPill').onclick = openSettings;
 $('memoryBtn').onclick = openMemory;
 $('connectorsBtn').onclick = openConnectors;
 $('folderBtn').onclick = (e) => openFolderMenu(e.currentTarget);
@@ -49,5 +50,7 @@ document.addEventListener('click', (e) => { if (!e.target.closest('.menu') && !e
   await loadWorkspaces();
   await openWorkspace(null);   // the last workspace you used, else the first
   const h = await refreshHealth();
+  checkOpenClawGateway();
+  setInterval(checkOpenClawGateway, 10000);
   if (!h.has_openrouter_key && !h.mock_mode) openSettings();
 })();

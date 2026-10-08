@@ -15,10 +15,45 @@ def _kaggle_hint(status: int | None, model: str) -> str:
             "เปิด notebook รันใหม่ แล้ววาง URL ใหม่ใน **Settings**")
 
 
+def _ollama_hint(status: int | None, model: str, exc: ProviderError) -> str:
+    from ..config import get_settings
+    settings = get_settings()
+    base_url = settings.ollama_base_url
+    msg = str(exc).lower()
+    clean_model = model[len("ollama/"):] if model.startswith("ollama/") else model
+
+    if "connection refused" in msg or "errno 61" in msg or "10061" in msg or "cannot connect" in msg:
+        return (
+            f"เชื่อมต่อไปยัง Ollama ที่ `{base_url}` ไม่ได้ (Connection refused) — "
+            "หากรันในเครื่องให้เปิด Terminal พิมพ์ `ollama serve` หรือเปิดแอป Ollama ก่อน "
+            "หรือหากใช้ Cloud/Remote API ให้เข้าไปตั้งค่า **Ollama Base URL** ใน **Settings**"
+        )
+    if status == 404:
+        return (
+            f"Ollama server ไม่มีโมเดล `{clean_model}` "
+            f"ให้ลองสั่ง `ollama pull {clean_model}` ใน Terminal หรือเลือกโมเดลอื่น"
+        )
+    if status in (401, 403):
+        return "Ollama API Key ไม่ถูกต้อง ตรวจสอบใน **Settings** ว่าวาง key ถูกต้องหรือไม่"
+    if status is not None and status >= 500:
+        return (
+            f"Ollama ตอบกลับว่าโมเดล `{clean_model}` ทำงานขัดข้อง (status {status}) "
+            "อาจเป็นเพราะหน่วยความจำ GPU/RAM ไม่พอหรือโหลดโมเดลไม่สำเร็จ"
+        )
+    return f"เรียกโมเดล Ollama `{clean_model}` ไม่สำเร็จ ({exc})"
+
+
 def explain(exc: ProviderError, model: str) -> str:
     status = exc.status
-    if model.startswith("kaggle/"):
+    if "openclaw" in str(exc).lower() or "18789" in str(exc):
+        hint = (
+            "เชื่อมต่อไปยัง OpenClaw Gateway ไม่ได้ — "
+            "กรุณาเปิด Terminal แล้วรัน `pnpm openclaw gateway` เพื่อเริ่มต้นระบบหลังบ้าน"
+        )
+    elif model.startswith("kaggle/"):
         hint = _kaggle_hint(status, model)
+    elif model.startswith("ollama/") or "ollama" in str(exc).lower() or (exc.provider_message and "ollama" in exc.provider_message.lower()):
+        hint = _ollama_hint(status, model, exc)
     elif status == 429:
         hint = (f"โมเดล `{model}` ถูกจำกัดจำนวนครั้งชั่วคราว (โมเดลฟรีมักเป็นแบบนี้เพราะทุกคนใช้โควตากลางร่วมกัน) "
                 "ระบบลองซ้ำให้แล้วแต่ยังไม่ผ่าน ลองส่งใหม่อีกสักครู่ หรือกด **Ask another agent** ใต้ข้อความของคุณเพื่อให้ agent ตัวอื่นตอบแทน")

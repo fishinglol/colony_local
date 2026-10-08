@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     kaggle_base_url: str | None = None
     kaggle_context_window: int = 16_384      # must match OLLAMA_CONTEXT_LENGTH in the notebook
 
+    # ── OpenClaw Engine (Gateway on port 18789) ──────────────────────────────
+    openclaw_gateway_enabled: bool = True
+    openclaw_gateway_url: str = "http://127.0.0.1:18789"
+    openclaw_gateway_token: str | None = None
+
     # ── Ollama API (Local or Cloud endpoint) ──────────────────────────────────
     ollama_base_url: str = "http://localhost:11434"
     ollama_api_key: str | None = None

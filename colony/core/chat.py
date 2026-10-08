@@ -28,6 +28,7 @@ from ..llm.ollama import is_ollama, generate_ollama_chat
 from .agent_loop import run_agent_loop
 from ..schemas import MessageRequest, MessageResponse
 from ..store.history import append_exchange
+from ..engine import openclaw
 from . import attachments, compaction, mcp
 from .agents import PLAN_NOTE, Role, ToolAccess, apply_mode
 from .approvals import approvals
@@ -188,10 +189,33 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     if settings.mock_mode:
         reply_text = f"[mock] {role.name} ({role.model}) — {text[:80]}" + (f" [+{len(refs)} file(s)]" if refs else "")
         actual_model = role.model
+    elif settings.openclaw_gateway_enabled and openclaw.is_openclaw_available(settings):
+        try:
+            openclaw_res = openclaw.run_openclaw_turn(
+                settings=settings,
+                role_id=role.id,
+                role_name=role.name,
+                role_model=role.model,
+                role_instructions=role.instructions,
+                workspace_id=workspace_id,
+                channel=channel,
+                user_message=full_text,
+                history=plan.history,
+            )
+            reply_text = openclaw_res.reply
+            actual_model = openclaw_res.model
+            actions = openclaw_res.actions
+        except ProviderError as exc:
+            logger.error("OpenClaw Gateway turn error: %s", exc)
+            return MessageResponse(
+                workspace_id=workspace_id, message_id=f"msg_{uuid4().hex}",
+                reply=explain(exc, role.model),
+                model=role.model, created_at=_now(), **meta,
+            )
     elif not (settings.openrouter_api_key or settings.openai_api_key or is_kaggle(role.model) or is_ollama(role.model)):
         return MessageResponse(
             workspace_id=workspace_id, message_id=f"msg_{uuid4().hex}",
-            reply="⚠️ ยังไม่ได้ตั้งค่า API key — เปิด Settings แล้วใส่ OpenRouter key ก่อนนะ",
+            reply="⚠️ ยังไม่ได้ตั้งค่า API key หรือเชื่อมต่อ OpenClaw Gateway — ตรวจสอบที่ Settings",
             model="none", created_at=_now(), **meta,
         )
     elif is_ollama(role.model):
@@ -200,24 +224,32 @@ def handle_message(request: MessageRequest) -> MessageResponse:
             role.model, full_text, role.name, role.instructions, memory_context,
             plan.history, plan.attributed, earlier_summary,
         )
-        if tools.any_on:
-            loop_res = run_agent_loop(
-                model=role.model,
-                messages=messages,
-                settings=settings,
-                folder=folder,
-                agent_name=role.name,
-                workspace_id=workspace_id,
-                tools_enabled=True,
+        try:
+            if tools.any_on:
+                loop_res = run_agent_loop(
+                    model=role.model,
+                    messages=messages,
+                    settings=settings,
+                    folder=folder,
+                    agent_name=role.name,
+                    workspace_id=workspace_id,
+                    tools_enabled=True,
+                )
+                reply_text, actual_model, actions = loop_res.reply, role.model, loop_res.actions
+            else:
+                chat_res = generate_ollama_chat(
+                    model=role.model,
+                    messages=messages,
+                    settings=settings,
+                )
+                reply_text, actual_model = chat_res.text, role.model
+        except ProviderError as exc:
+            logger.error("Provider error (ollama): %s", exc)
+            return MessageResponse(
+                workspace_id=workspace_id, message_id=f"msg_{uuid4().hex}",
+                reply=explain(exc, role.model),
+                model=role.model, created_at=_now(), **meta,
             )
-            reply_text, actual_model, actions = loop_res.reply, role.model, loop_res.actions
-        else:
-            chat_res = generate_ollama_chat(
-                model=role.model,
-                messages=messages,
-                settings=settings,
-            )
-            reply_text, actual_model = chat_res.text, role.model
     elif tools.any_on:
         # An agent with tools runs through Pi; agents without tools take the plain chat path below.
         def refuse(reply: str) -> MessageResponse:

@@ -158,3 +158,40 @@ def test_decide_via_ollama_returns_none_on_error(monkeypatch):
 
     res = decider.decide_via_ollama("test error", list(DEFAULT_ROLES), settings)
     assert res is None
+
+
+def test_chat_handles_ollama_failure_gracefully(monkeypatch):
+    from fastapi.testclient import TestClient
+    from colony.app import app
+    from colony.config import get_settings
+    from colony.core import chat
+
+    monkeypatch.setenv("MOCK_MODE", "false")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    get_settings.cache_clear()
+
+    def fake_ollama_fail(**kwargs):
+        raise ProviderError("Ollama request failed: <urlopen error [Errno 61] Connection refused>")
+
+    monkeypatch.setattr(chat, "generate_ollama_chat", fake_ollama_fail)
+
+    client = TestClient(app)
+    shop = client.post("/api/workspaces", json={"name": "OllamaWS"}).json()
+    custom_role = [{
+        "id": "ollama_agent", "name": "Nemotron",
+        "model": "ollama/nemotron-3-nano:30b", "when": "anything",
+        "instructions": "help",
+    }]
+    client.put(f"/api/roles?workspace_id={shop['id']}", json={"roles": custom_role})
+
+    res = client.post("/api/messages", json={
+        "workspace_id": shop["id"],
+        "message": "hello",
+        "role_id": "ollama_agent",
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert "เชื่อมต่อไปยัง Ollama" in data["reply"]
+    assert "ollama serve" in data["reply"]
+
+

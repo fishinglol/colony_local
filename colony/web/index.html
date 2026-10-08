@@ -54,6 +54,10 @@
         </div>
       </div>
       <div class="bar-right">
+        <button class="chip-btn openclaw-pill" id="openclawPill" title="OpenClaw Gateway Engine Status">
+          <span class="openclaw-dot" id="openclawDot"></span>
+          <span id="openclawLabel">OpenClaw Gateway</span>
+        </button>
         <div class="ctx-wrap">
           <button class="chip-btn" id="ctxBtn" title="How full each agent's context window is">Context</button>
           <div class="ctx-pop" id="ctxPop"></div>
@@ -184,6 +188,16 @@
       <label>Ollama API Key (optional)</label>
       <input id="fOllamaKey" type="password" autocomplete="off" placeholder="Bearer / API key if required">
       <small id="ollamaKeyStatus"></small>
+    </div>
+    <div class="field">
+      <label>OpenClaw Gateway URL (optional)</label>
+      <input id="fOpenclawUrl" type="url" autocomplete="off" placeholder="http://127.0.0.1:18789">
+      <small>Local OpenClaw Gateway daemon controlling subagents, tools sandbox, and memory tiers.</small>
+    </div>
+    <div class="field">
+      <label>OpenClaw Gateway Token (optional)</label>
+      <input id="fOpenclawToken" type="password" autocomplete="off" placeholder="Bearer token if authentication is enabled">
+      <small id="openclawTokenStatus"></small>
     </div>
     <div class="form-error" id="settingsError"></div>
     <div class="actions"><div class="right">

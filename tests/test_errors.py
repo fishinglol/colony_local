@@ -118,3 +118,18 @@ def test_a_message_too_long_for_the_model_says_so_instead_of_blaming_the_model_n
     exc = ProviderError("raw", status=400, provider_message="This model's maximum context length is 32768 tokens. However, you requested 40000")
     text = explain(exc, "z-ai/glm-5.2:free")
     assert "ยาวเกิน context" in text and "Ask another agent" in text and "ไม่รู้จัก" not in text
+
+
+def test_ollama_connection_refused_explains_how_to_start_serve():
+    exc = ProviderError("Ollama request failed: <urlopen error [Errno 61] Connection refused>")
+    text = explain(exc, "ollama/nemotron-3-nano:30b")
+    assert "ollama serve" in text
+    assert "Settings" in text
+    assert "Connection refused" in text
+
+
+def test_ollama_404_explains_pull():
+    exc = ProviderError("Ollama request failed: 404 not found", status=404)
+    text = explain(exc, "ollama/nemotron-3-super")
+    assert "ollama pull nemotron-3-super" in text
+
