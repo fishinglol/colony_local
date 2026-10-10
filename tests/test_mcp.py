@@ -1,16 +1,14 @@
-"""Connectors (MCP): the store, and the REAL Pi + pi-mcp-adapter talking to a fake MCP server."""
+"""Connectors (MCP): kept in OpenClaw's own config (mcp.servers); Colony edits, masks and validates them."""
 import json
-import sys
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from colony.app import app
-from colony.config import Settings
 from colony.core import mcp
+from colony.engine import openclaw
 from colony.core.agents import ToolAccess
-from colony.engine import pi as engine
 
 client = TestClient(app)
 FAKE_SERVER = Path(__file__).with_name("fake_mcp.py")
@@ -34,8 +32,7 @@ def test_secrets_are_masked_for_the_browser_and_a_masked_value_keeps_what_is_sto
     shown["enabled"] = False
     client.put("/api/mcp", json={"servers": {"composio": shown}})                   # the browser sends the mask back
     assert mcp.load()["composio"].headers == {"x-consumer-api-key": "ck_real"} and mcp.load()["composio"].enabled is False
-    stored = tmp_path / "mcp-servers.json"
-    assert oct(stored.stat().st_mode & 0o777) == "0o600"
+    assert oct(openclaw.config_path().stat().st_mode & 0o777) == "0o600"        # the config holds the key
 
 
 def test_bad_names_and_bad_servers_are_refused_with_a_reason():
@@ -49,178 +46,42 @@ def test_composio_is_one_click_with_only_a_key():
     assert res.status_code == 200
     server = mcp.load()["composio"]
     assert server.url == mcp.COMPOSIO_URL and server.headers == {"x-consumer-api-key": "ck_abc"}
-    assert mcp.enabled_for_pi()["composio"] == {"url": mcp.COMPOSIO_URL, "headers": {"x-consumer-api-key": "ck_abc"}}
+    entry = openclaw.read_config()["mcp"]["servers"]["composio"]                # what OpenClaw's MCP client reads
+    assert entry == {"enabled": True, "url": mcp.COMPOSIO_URL, "transport": "streamable-http",
+                     "headers": {"x-consumer-api-key": "ck_abc"}}
 
 
-def test_only_enabled_servers_reach_pi():
+def test_only_enabled_servers_are_offered_to_agents():
     client.put("/api/mcp", json={"servers": {"on": {"command": "x"}, "off": {"command": "y", "enabled": False}}})
-    assert list(mcp.enabled_for_pi()) == ["on"]
+    assert mcp.enabled_names() == ["on"]
 
 
-# ── the real Pi ───────────────────────────────────────────────────────────────────────────────
-
-real_mcp = pytest.mark.skipif(not (engine.RUNTIME_PI.exists() and engine.MCP_ADAPTER.exists()),
-                              reason="Pi or pi-mcp-adapter is not installed (npm install in local/pi-runtime)")
-
-
-@pytest.fixture
-def model_server():
-    from .fake_llm import FakeModelServer
-    server = FakeModelServer()
-    yield server
-    server.shutdown()
-
-
-@pytest.fixture
-def setup(tmp_path, model_server):
-    settings = Settings(openrouter_api_key="sk-or-secret", data_dir=tmp_path, openrouter_base_url=model_server.base_url,
-                        tools_turn_timeout_seconds=120.0, approval_timeout_seconds=20.0)
-    log = tmp_path / "server.log"
-    servers = {"fake": {"command": sys.executable, "args": [str(FAKE_SERVER), str(log)], "env": {"FAKE_SECRET": "s3cret"}}}
-    (tmp_path / "ws").mkdir()
-
-    def run(message, mcp_rule="ask", approve=lambda tool, what: True, tools=None, servers_=servers):
-        return engine.run_turn(settings=settings, model="acme/model:free", system_prompt="You are Coder.", prompt=message,
-                               workspace=tmp_path / "ws", tools=tools or ToolAccess(mcp=mcp_rule), approve=approve, mcp_servers=servers_)
-    return run, log, model_server, tmp_path
+def test_saving_keeps_what_openclaw_has_that_colony_cannot_show():
+    openclaw.write_config({"tools": {"profile": "full"}, "mcp": {"servers": {
+        "oauth-only": {"url": "https://a.b/mcp", "auth": "oauth"},                       # a url server with an OpenClaw-only setting
+        "weird": {"enabled": True}}}})                                                   # neither command nor url: Colony cannot show it
+    shown = client.get("/api/mcp").json()["servers"]
+    assert "weird" not in shown and "oauth-only" in shown
+    client.put("/api/mcp", json={"servers": {"mine": {"command": "x"}, "oauth-only": shown["oauth-only"]}})
+    cfg = openclaw.read_config()
+    assert cfg["tools"] == {"profile": "full"}                                           # the rest of the config is untouched
+    assert cfg["mcp"]["servers"]["weird"] == {"enabled": True}                           # not part of the list Colony shows
+    assert cfg["mcp"]["servers"]["oauth-only"]["auth"] == "oauth"                        # extra OpenClaw settings survive an edit
+    client.put("/api/mcp", json={"servers": {"mine": {"command": "x"}}})                 # removing a shown server removes it
+    assert set(openclaw.read_config()["mcp"]["servers"]) == {"mine", "weird"}
 
 
-def calls(log: Path) -> list[dict]:
-    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
-
-
-def tool_calls(log: Path) -> list[dict]:
-    return [c for c in calls(log) if c.get("method") == "tools/call"]
-
-
-@real_mcp
-def test_a_connector_call_asks_first_then_reaches_the_server(setup):
-    run, log, server, _ = setup
-    asked = []
-    result = run('MCP fake_echo {"text": "hi there"}', approve=lambda tool, what: asked.append((tool, what)) or True)
-    assert asked and asked[0][0] == "mcp" and "fake_echo" in asked[0][1] and "hi there" in asked[0][1]
-    params = tool_calls(log)[0]["params"]
-    assert (params["name"], params["arguments"]) == ("echo", {"text": "hi there"})
-    assert "echo ran with" in result.text and result.actions == ["used connector fake_echo"]
-    assert "mcp" in server.requests[0]["tools"]
-
-
-@real_mcp
-def test_a_refused_connector_call_never_reaches_the_server(setup):
-    run, log, _, _ = setup
-    result = run('MCP fake_delete_everything {"what": "all"}', approve=lambda tool, what: False)
-    assert tool_calls(log) == [] and "did not approve" in result.text and result.actions == ["used connector fake_delete_everything ✗"]
-
-
-@real_mcp
-def test_allow_skips_the_question(setup):
-    run, log, _, _ = setup
-    run('MCP fake_echo {"text": "x"}', mcp_rule="allow", approve=lambda tool, what: pytest.fail("asked"))
-    assert len(tool_calls(log)) == 1
-
-
-@real_mcp
-def test_looking_through_the_connectors_never_asks(setup):
-    run, _, _, _ = setup
-    result = run("MCPSEARCH echo", approve=lambda tool, what: pytest.fail("asked"))
-    assert "fake_echo" in result.text
-
-
-@real_mcp
-def test_an_agent_cannot_install_or_sign_in_to_connectors(setup):
-    run, log, _, tmp_path = setup
-    result = run("MCPINSTALL https://evil.example/mcp", mcp_rule="allow", approve=lambda tool, what: pytest.fail("asked"))
-    assert "set up by the user" in result.text
-    assert not (tmp_path / "ws" / ".mcp.json").exists() and tool_calls(log) == []
-
-
-@real_mcp
-def test_only_colonys_servers_run_never_a_projects_own_mcp_json(setup):
-    run, _, _, tmp_path = setup
-    decoy = tmp_path / "decoy.log"
-    (tmp_path / "ws" / ".mcp.json").write_text(json.dumps({"mcpServers": {"decoy": {
-        "command": sys.executable, "args": [str(FAKE_SERVER), str(decoy)]}}}))
-    run("MCPSEARCH echo")
-    run('MCP decoy_echo {"text": "x"}', mcp_rule="allow")
-    assert not decoy.exists()                                      # a project's own config is never started
-
-
-@real_mcp
-def test_a_web_connector_gets_its_headers_which_is_how_composio_is_reached(setup):
-    from .fake_mcp import FakeHttpMcp
-    run, _, _, _ = setup
-    remote = FakeHttpMcp()
-    try:
-        servers = {"composio": {"url": remote.url, "headers": {"x-consumer-api-key": "ck_test"}}}
-        result = run('MCP composio_echo {"text": "over http"}', mcp_rule="allow", servers_=servers)
-    finally:
-        remote.shutdown()
-    assert "echo ran with" in result.text and "over http" in result.text
-    assert remote.seen and all(headers.get("x-consumer-api-key") == "ck_test" for headers, _ in remote.seen)
-    assert "tools/call" in [msg.get("method") for _, msg in remote.seen]
-
-
-@real_mcp
-def test_connectors_off_means_the_tool_does_not_exist_for_the_model(setup):
-    run, _, server, _ = setup
-    run("hello", tools=ToolAccess(read="allow"))
-    assert "mcp" not in server.requests[-1]["tools"]
-
-
-@real_mcp
-def test_no_servers_configured_means_no_connector_tool(setup):
-    run, _, server, _ = setup
-    run("hello", tools=ToolAccess(read="allow", mcp="ask"), servers_={})
-    assert "mcp" not in server.requests[-1]["tools"]
-
-
-# ── how a chat turn uses connectors ───────────────────────────────────────────────────────────
-
-def live_chat(monkeypatch, mcp_access="ask"):
-    from colony.config import get_settings
-    from colony.core import chat, context
-    monkeypatch.setenv("MOCK_MODE", "false")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    get_settings.cache_clear()
-    monkeypatch.setattr(context, "get_json", lambda *a, **k: {"data": []})
-    monkeypatch.setattr(chat.memory, "maybe_review_in_background", lambda *a: None)
-    monkeypatch.setattr(chat.compaction, "maybe_compact_in_background", lambda *a: None)
-    monkeypatch.setattr(chat, "supports_tools", lambda model, settings: True)
-    client.put("/api/roles", json={"roles": [{"id": "dev", "name": "Dev", "model": "acme/m", "when": "all", "tools": {"mcp": mcp_access}}]})
-    return chat
-
-
-def test_an_agent_with_connectors_runs_through_pi_even_without_a_project_folder(monkeypatch, tmp_path):
-    chat = live_chat(monkeypatch)
-    client.put("/api/mcp", json={"servers": {"fake": {"command": "x"}}})
-    runs = []
-    monkeypatch.setattr(chat, "run_turn", lambda **kw: runs.append(kw) or engine.PiResult("done", []))
-    assert client.post("/api/messages", json={"message": "use my apps", "role_id": "dev"}).json()["reply"] == "done"
-    run = runs[0]
-    assert run["tools"] == ToolAccess(mcp="ask") and run["mcp_servers"] == {"fake": {"command": "x", "args": []}}
-    assert run["workspace"] == tmp_path / "pi-agent" / "no-folder" and run["workspace"].is_dir()
-    assert "`mcp` tool" in run["system_prompt"] and "workspace folder" not in run["system_prompt"]     # no file-tool talk
-
-
-def test_connectors_on_but_none_set_up_means_a_plain_reply_that_does_not_pretend(monkeypatch):
-    chat = live_chat(monkeypatch)
-    monkeypatch.setattr(chat, "run_turn", lambda **kw: (_ for _ in ()).throw(AssertionError("Pi must not start")))
-    sent = {}
-    monkeypatch.setattr(chat, "generate_openrouter_reply", lambda **kw: sent.update(kw) or type("R", (), {"text": "ok", "model": "acme/m"})())
-    client.post("/api/messages", json={"message": "hi", "role_id": "dev"})
-    assert "No connectors are set up" in sent["role_instructions"]
-
-
-def test_the_workspace_mode_governs_connector_calls(monkeypatch):
-    chat = live_chat(monkeypatch, mcp_access="allow")
-    client.put("/api/mcp", json={"servers": {"fake": {"command": "x"}}})
-    seen = []
-    monkeypatch.setattr(chat, "run_turn", lambda **kw: seen.append(kw["tools"].mcp) or engine.PiResult("done", []))
-    for mode in ("auto", "manual", "accept_edits", "bypass", "plan"):
-        client.patch("/api/workspaces/local", json={"mode": mode})
-        client.post("/api/messages", json={"message": "go", "role_id": "dev"})
-    # plan = read only, so a connector agent then has nothing to do and simply chats
-    assert seen == ["allow", "ask", "ask", "allow"]
+def test_an_agent_is_allowed_exactly_the_connectors_ticked_for_it(monkeypatch, tmp_path):
+    from colony.config import Settings
+    openclaw.write_config({})
+    monkeypatch.setattr(openclaw.urllib.request, "urlopen",
+                        lambda url, timeout=None: (_ for _ in ()).throw(OSError("no gateway in tests")))
+    settings = Settings(data_dir=tmp_path)
+    with pytest.raises(Exception):
+        openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(mcp="allow"), connectors=["composio", "docs"],
+                              wait_seconds=0.1)
+    allow = openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["tools"]["alsoAllow"]
+    assert allow == ["composio__*", "docs__*", "read", "write", "edit", "memory_search", "memory_get"]      # read/write/edit: the shared memory files
 
 
 def test_links_open_in_the_real_browser_and_only_web_addresses(monkeypatch):
@@ -233,29 +94,6 @@ def test_links_open_in_the_real_browser_and_only_web_addresses(monkeypatch):
     assert opened == ["https://accounts.example.com/oauth?x=1"]
     monkeypatch.setattr(webbrowser, "open", lambda url: False)
     assert client.post("/api/open-url", json={"url": "https://a.example/"}).status_code == 500
-
-
-def test_an_agent_only_gets_the_connectors_ticked_for_it_and_stays_within_its_apps(monkeypatch):
-    chat = live_chat(monkeypatch)
-    client.put("/api/mcp", json={"servers": {"composio": {"url": "https://connect.composio.dev/mcp"}, "files": {"command": "x"}}})
-    runs = []
-    monkeypatch.setattr(chat, "run_turn", lambda **kw: runs.append(kw) or engine.PiResult("done", []))
-
-    def agent(tools):
-        client.put("/api/roles", json={"roles": [{"id": "dev", "name": "Dev", "model": "acme/m", "when": "all", "tools": tools}]})
-        client.post("/api/messages", json={"message": "go", "role_id": "dev"})
-        return runs[-1]
-
-    assert sorted(agent({"mcp": "ask"})["mcp_servers"]) == ["composio", "files"]                      # None = every connector
-    only = agent({"mcp": "ask", "mcp_servers": ["composio"], "mcp_apps": ["Gmail", "Notion"]})
-    assert list(only["mcp_servers"]) == ["composio"]
-    assert "use only these apps: Gmail, Notion" in only["system_prompt"]
-    assert "use only these apps" not in agent({"mcp": "ask", "mcp_servers": ["files"], "mcp_apps": ["Gmail"]})["system_prompt"]   # no Composio, no app talk
-    count = len(runs)
-    client.put("/api/roles", json={"roles": [{"id": "dev", "name": "Dev", "model": "acme/m", "when": "all", "tools": {"mcp": "ask", "mcp_servers": ["gone"]}}]})
-    monkeypatch.setattr(chat, "generate_openrouter_reply", lambda **kw: type("R", (), {"text": "ok", "model": "acme/m"})())
-    client.post("/api/messages", json={"message": "go", "role_id": "dev"})
-    assert len(runs) == count                                                                          # a connector that no longer exists = plain chat
 
 
 def test_modes_keep_which_connectors_an_agent_may_use():

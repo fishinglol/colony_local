@@ -49,8 +49,7 @@ document.addEventListener('click', (e) => { if (!e.target.closest('.menu') && !e
   initModelPicker();
   await loadWorkspaces();
   await openWorkspace(null);   // the last workspace you used, else the first
-  const h = await refreshHealth();
+  await refreshHealth();
   checkOpenClawGateway();
   setInterval(checkOpenClawGateway, 10000);
-  if (!h.has_openrouter_key && !h.mock_mode) openSettings();
 })();

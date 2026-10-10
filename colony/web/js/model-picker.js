@@ -1,5 +1,5 @@
 // The "Select model" window: search, models grouped by maker, and a card on hover that says what the model can do.
-// Capabilities (tools, images, video, reasoning, context) come from OpenRouter's catalog via /api/models.
+// Capabilities (tools, images, reasoning, context) come from /api/models.
 import { api } from './api.js';
 import { $, el } from './dom.js';
 import { LABELS } from './reasoning.js';
@@ -16,19 +16,17 @@ let active = -1;
 export function modelSource(m) {
   if (m.source) return m.source;
   if (m.id.startsWith('ollama/') || m.provider === 'ollama') return 'ollama';
-  if (m.id.startsWith('kaggle/') || m.provider === 'kaggle') return 'kaggle';
-  return 'openrouter';
+  return 'ollama';
 }
 
 export function modelSourceLabel(m) {
   if (m.source_label) return m.source_label;
   const s = modelSource(m);
   if (s === 'ollama') return 'Ollama Cloud / Local';
-  if (s === 'kaggle') return 'Kaggle (your GPU)';
-  return 'OpenRouter';
+  return 'Ollama Cloud / Local';
 }
 
-// The list is fetched once (the server caches OpenRouter's catalog); until it arrives the picker shows a hint.
+// The list is fetched once (the server's list of Ollama models); until it arrives the picker shows a hint.
 export async function ensureModels() {
   if (!state.modelPool.length) {
     const data = await api('/models');
@@ -57,11 +55,9 @@ function capRows(m) {
 function capNote(m) {
   const c = m.capabilities || {};
   if (!c.inputs) {
-    return state.modelCatalog
-      ? "OpenRouter doesn't list this model right now, so it may have been removed. Use “Test this model” before relying on it."
-      : "OpenRouter's list couldn't be reached, so the details are unknown.";
+    return "Not in the suggested list. Use “Test this model” to check that Ollama can run it.";
   }
-  return c.inputs.some((x) => x !== 'text') ? 'Files you attach are sent to this model as they are; Jev only picks agents whose model can read them.' : '';
+  return c.inputs.some((x) => x !== 'text') ? 'Images you attach are sent to this model as they are; other files are pasted as text when they are text.' : '';
 }
 
 function fill(node, m) {
@@ -101,14 +97,10 @@ function renderTabs() {
   container.innerHTML = '';
 
   const ollamaCount = state.modelPool.filter((m) => modelSource(m) === 'ollama').length;
-  const kaggleCount = state.modelPool.filter((m) => modelSource(m) === 'kaggle').length;
-  const orCount = state.modelPool.filter((m) => modelSource(m) === 'openrouter').length;
 
   const tabs = [
     { id: 'all', label: `All (${state.modelPool.length})` },
     { id: 'ollama', label: `🦙 Ollama (${ollamaCount})` },
-    ...(kaggleCount > 0 ? [{ id: 'kaggle', label: `⚡ Kaggle GPU (${kaggleCount})` }] : []),
-    { id: 'openrouter', label: `🌐 OpenRouter (${orCount})` },
   ];
 
   tabs.forEach((t) => {
@@ -129,7 +121,7 @@ function group(title, models) {
   models.forEach((m) => {
     const b = el('button', 'picker-row' + (m.id === currentId ? ' current' : '')); b.type = 'button'; b.dataset.id = m.id;
     const src = modelSource(m);
-    const srcBadge = el('span', `picker-source-badge ${src}`, src === 'ollama' ? 'Ollama' : src === 'kaggle' ? 'Kaggle' : 'OpenRouter');
+    const srcBadge = el('span', `picker-source-badge ${src}`, 'Ollama');
     b.append(srcBadge, el('span', 'picker-name', m.label));
     const tag = m.note || (m.id.endsWith(':free') ? 'Free' : '');
     if (tag) b.appendChild(el('span', 'picker-tag', tag));
@@ -153,28 +145,14 @@ function render() {
 
   const groups = new Map();
   shown.forEach((m) => {
-    const src = modelSource(m);
     let title = '';
-    if (src === 'ollama') {
-      title = '🦙 Ollama (Cloud & Local)';
-    } else if (src === 'kaggle') {
-      title = '⚡ Kaggle (Your GPU)';
-    } else if (m.suggested) {
-      title = '⭐ OpenRouter — Suggested';
-    } else if (m.id.endsWith(':free')) {
-      title = '🎁 OpenRouter — Free Models';
-    } else {
-      title = `🌐 OpenRouter — ${m.provider_name}`;
-    }
+    title = '🦙 Ollama (Cloud & Local)';
     if (!groups.has(title)) groups.set(title, []);
     groups.get(title).push(m);
   });
 
   const orderRank = (t) => {
     if (t.includes('Ollama')) return 1;
-    if (t.includes('Kaggle')) return 2;
-    if (t.includes('Suggested')) return 3;
-    if (t.includes('Free Models')) return 4;
     return 10;
   };
 

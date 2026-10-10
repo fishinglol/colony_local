@@ -46,12 +46,12 @@ function showModel() {
   const m = findModel(pickedModel);
   $('modelBtnLabel').textContent = m ? m.label : (pickedModel || 'Pick a model');
   $('modelBtnId').textContent = pickedModel;
-  $('modelNote').textContent = m ? '' : 'Not in the suggested list: any model on openrouter.ai/models works. Use "Test this model" to check it.';
+  $('modelNote').textContent = m ? '' : 'Not in the suggested list: any Ollama model id works (ollama/<name>). Use "Test this model" to check it.';
   showModelIcon();
   renderReasoning();
 }
 
-// Level buttons for the chosen model: only what it supports (from OpenRouter's catalog); hidden when it can't reason.
+// Level buttons for the chosen model: only what it supports (from /api/models); hidden when it can't reason.
 function renderReasoning() {
   const options = reasoningOptions(pickedModel), levels = reasoningLevels(pickedModel);
   $('reasoningField').style.display = options.length ? '' : 'none';
@@ -75,14 +75,116 @@ function showModelIcon() {
 
 // The agent's tools are edited in the "Connect a tool" window (tool-picker.js); the editor keeps the draft and lists what is on.
 let toolDraft = emptyTools();
-let toolsLocked = false;      // the chosen model can't use tools (OpenRouter's catalog says so)
+let toolsLocked = false;      // the chosen model can't use tools (the model list says so)
 let toolCheck = 0;
 
+function syncCapabilityCheckboxes() {
+  const cbWeb = $('capWebSearch');
+  const cbRead = $('capReadFile');
+  const cbWrite = $('capWriteFile');
+  const cbBash = $('capBashExec');
+
+  if (cbWeb) {
+    cbWeb.checked = !!toolDraft.web_search;
+    $('capCardWeb')?.classList.toggle('selected', cbWeb.checked);
+  }
+  if (cbRead) {
+    cbRead.checked = toolDraft.read !== 'off';
+    $('capCardRead')?.classList.toggle('selected', cbRead.checked);
+  }
+  if (cbWrite) {
+    cbWrite.checked = toolDraft.write !== 'off';
+    $('capCardWrite')?.classList.toggle('selected', cbWrite.checked);
+  }
+  if (cbBash) {
+    cbBash.checked = toolDraft.bash !== 'off';
+    $('capCardBash')?.classList.toggle('selected', cbBash.checked);
+  }
+}
+
+function bindCapabilityEvents() {
+  const cbWeb = $('capWebSearch');
+  const cbRead = $('capReadFile');
+  const cbWrite = $('capWriteFile');
+  const cbBash = $('capBashExec');
+  const btnPreset = $('applyRolePresetBtn');
+
+  if (cbWeb && !cbWeb._bound) {
+    cbWeb._bound = true;
+    cbWeb.onchange = () => {
+      toolDraft.web_search = cbWeb.checked;
+      renderToolRows();
+    };
+  }
+  if (cbRead && !cbRead._bound) {
+    cbRead._bound = true;
+    cbRead.onchange = () => {
+      toolDraft.read = cbRead.checked ? 'allow' : 'off';
+      renderToolRows();
+    };
+  }
+  if (cbWrite && !cbWrite._bound) {
+    cbWrite._bound = true;
+    cbWrite.onchange = () => {
+      toolDraft.write = cbWrite.checked ? 'allow' : 'off';
+      renderToolRows();
+    };
+  }
+  if (cbBash && !cbBash._bound) {
+    cbBash._bound = true;
+    cbBash.onchange = () => {
+      toolDraft.bash = cbBash.checked ? 'allow' : 'off';
+      renderToolRows();
+    };
+  }
+  if (btnPreset && !btnPreset._bound) {
+    btnPreset._bound = true;
+    btnPreset.onclick = applyCurrentRolePreset;
+  }
+}
+
+function applyCurrentRolePreset() {
+  const name = ($('fName').value || '').trim().toLowerCase();
+  const id = state.editingId || '';
+
+  if (name.includes('coder') || name.includes('dev') || name.includes('program') || id === 'coding') {
+    toolDraft.web_search = true;
+    toolDraft.read = 'allow';
+    toolDraft.write = 'allow';
+    toolDraft.bash = 'allow';
+    toast('Coder: เปิดครบชุด (Bash, เขียนไฟล์, อ่านไฟล์, ค้นหาเว็บ) 💻');
+  } else if (name.includes('writer') || name.includes('เขียน') || id === 'writing') {
+    toolDraft.web_search = true;
+    toolDraft.read = 'allow';
+    toolDraft.write = 'allow';
+    toolDraft.bash = 'off';
+    toast('Writer: เปิดเขียนและอ่านไฟล์ + ค้นหาเว็บ (ปิด Bash เพื่อความปลอดภัย) ✍️');
+  } else if (name.includes('buddy') || name.includes('chat') || id === 'chitchat') {
+    toolDraft.web_search = true;
+    toolDraft.read = 'off';
+    toolDraft.write = 'off';
+    toolDraft.bash = 'off';
+    toast('Buddy: เปิดค้นหาเว็บสด (ปิดการเข้าถึงไฟล์ในเครื่อง) 💬');
+  } else {
+    // Thinker / Default
+    toolDraft.web_search = true;
+    toolDraft.read = 'allow';
+    toolDraft.write = 'off';
+    toolDraft.bash = 'off';
+    toast('Thinker: เปิดค้นหาเว็บ + อ่านไฟล์เพื่อวิเคราะห์ (ปิดการแก้ไฟล์และรันคำสั่ง) 🧠');
+  }
+
+  renderToolRows();
+}
+
 function renderToolRows() {
+  syncCapabilityCheckboxes();
   const box = $('toolRows'); box.innerHTML = '';
   const rows = toolRows(toolDraft);
-  if (!rows.length) box.appendChild(el('small', null, 'No tools yet. This agent only chats.'));
+  if (!rows.length) box.appendChild(el('small', null, 'ไม่มี Connector ภายนอกเชื่อมต่อเพิ่มเติม'));
   rows.forEach((r) => {
+    // Only show custom mcp or connectors in the sub-list
+    if (['read', 'write', 'bash', 'web'].includes(r.id)) return;
     const row = el('div', 'tool-row'), logo = toolLogo(r), main = el('div', 'tr-main');
     main.append(el('div', 'tr-name', r.name), el('div', 'tr-scope', r.scope));
     const x = el('button', 'tr-x', '×'); x.type = 'button'; x.title = 'Disconnect';
@@ -111,12 +213,11 @@ async function syncToolLock() {
   toolsLocked = supported === false;
   if (toolsLocked) toolDraft = { ...emptyTools(), web_search: toolDraft.web_search };
   renderToolRows();
-  const t = state.tools || {}, notes = [];
-  if (toolsLocked) notes.push("This model can't use tools (OpenRouter lists no tool support for it), so only web search is available. Pick another model to connect more.");
+  const notes = [];
+  if (toolsLocked) notes.push("This model can't use tools (Ollama lists no tool support for it), so only web search is available. Pick another model to connect more.");
   else {
     const folder = (currentWorkspace() || {}).effective_folder;
     notes.push(folder ? `File tools work only inside ${folder}.` : 'File tools and commands need a Project folder (Workspace settings, top of the sidebar). Apps and web search do not.');
-    if (t.pi_installed === false) notes.push('The Pi engine is not installed yet (npm install in local/pi-runtime).');
   }
   $('toolsNote').textContent = notes.join(' ');
 }
@@ -136,6 +237,7 @@ export async function testModel() {
 function fillAgentForm(r) {
   toolDraft = toolsFromRole(r);            // before the model is set: that check may take tools away
   $('fName').value = r.name; pickedReasoning = r.reasoning || 'default'; setModel(r.model); $('fWhen').value = r.when; $('fInstructions').value = r.instructions;
+  bindCapabilityEvents();
   renderToolRows();
   loadServers().then(renderToolRows);      // an agent with "every connector" needs the connector list to show its rows
 }
@@ -144,6 +246,8 @@ export function openAgentModal(id) {
   state.editingId = id;
   const r = state.roles.find((x) => x.id === id) || { name: '', model: DEFAULT_MODEL, when: '', instructions: '' };
   $('agentModalTitle').textContent = id ? `Edit ${r.name}` : 'Add agent';
+  bindCapabilityEvents();
+
   const presets = $('presets'); presets.innerHTML = '';
   if (!id) {
     presets.appendChild(el('span', 'label', 'Start from'));

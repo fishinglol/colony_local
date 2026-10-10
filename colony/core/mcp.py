@@ -1,24 +1,21 @@
 """Connectors: the MCP servers agents with the "connectors" permission can use.
 
-One list for the whole app, kept in ~/.colony/mcp-servers.json (0600, it holds API keys). A server is either a
-local program (`command` + `args` + `env`, spoken to over stdin/stdout) or a web address (`url` + `headers`).
-Pi's MCP adapter does the talking; Colony only decides which servers exist and which agents may use them
-(see engine/pi.py and colony-gate.ts). Secrets never go to the browser: reads show them masked, and a masked
-value sent back unchanged means "keep what is stored".
+OpenClaw owns them: they live in OpenClaw's own config (`mcp.servers` in ~/.openclaw/openclaw.json, which we write 0600
+because it holds API keys) and OpenClaw's built-in MCP client connects to them and exposes their tools as
+`<server>__<tool>`. Colony keeps only the friendly editing layer for its Connectors window: validation, masking, and
+which agents may use which server (see engine/openclaw.py::ensure_agent). Secrets never go to the browser: reads show
+them masked, and a masked value sent back unchanged means "keep what is stored". Servers OpenClaw knows about that
+Colony cannot show (OAuth, extra fields) are left untouched.
 """
-import json
-import os
-import threading
-from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from ..config import get_settings
+from ..engine.openclaw import config_lock, read_config, write_config
 
 MASK = "••••••••"
 MAX_SERVERS = 20
 COMPOSIO_URL = "https://connect.composio.dev/mcp"
-_LOCK = threading.RLock()
 _NAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_-"
 
 
@@ -41,37 +38,51 @@ class McpServer(BaseModel):
         return self
 
 
-def _path() -> Path:
-    return get_settings().data_dir / "mcp-servers.json"
-
-
 def _valid_name(name: str) -> bool:
     return 0 < len(name) <= 40 and all(c in _NAME_CHARS for c in name)
 
 
+def _entries(cfg: dict[str, Any]) -> dict[str, dict]:
+    return (cfg.get("mcp") or {}).get("servers") or {}
+
+
+def _read(entry: dict[str, Any]) -> McpServer:
+    return McpServer(
+        command=entry.get("command"), args=[str(a) for a in entry.get("args") or []],
+        env={k: str(v) for k, v in (entry.get("env") or {}).items()},
+        url=entry.get("url"), headers={k: str(v) for k, v in (entry.get("headers") or {}).items()},
+        enabled=entry.get("enabled", True))
+
+
+def _entry_for(server: McpServer, old: dict[str, Any] | None) -> dict[str, Any]:
+    """OpenClaw's config entry for this server, keeping any settings of its own we do not manage (timeouts, toolFilter, ...)."""
+    entry = {k: v for k, v in (old or {}).items() if k not in ("command", "args", "env", "url", "headers", "transport")}
+    entry["enabled"] = server.enabled
+    if server.command:
+        entry["command"], entry["args"] = server.command, server.args
+        if server.env:
+            entry["env"] = server.env
+    else:
+        entry["url"] = server.url
+        # OpenClaw defaults a URL to the legacy SSE transport; modern servers (Composio included) speak streamable HTTP.
+        entry["transport"] = "sse" if server.url.rstrip("/").endswith("/sse") else "streamable-http"
+        if server.headers:
+            entry["headers"] = server.headers
+    return entry
+
+
 def load() -> dict[str, McpServer]:
-    with _LOCK:
+    servers = {}
+    for name, entry in _entries(read_config()).items():
         try:
-            raw = json.loads(_path().read_text(encoding="utf-8")).get("servers") or {}
-        except (OSError, ValueError, AttributeError):
-            return {}
-        servers = {}
-        for name, item in raw.items():
-            try:
-                servers[name] = McpServer(**item)
-            except (TypeError, ValueError):
-                continue
-        return servers
+            servers[name] = _read(entry)
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return servers
 
 
-def _write(servers: dict[str, McpServer]) -> None:
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"servers": {n: s.model_dump() for n, s in servers.items()}}, f, indent=2)
-    os.replace(tmp, path)
+def enabled_names() -> list[str]:
+    return [name for name, server in load().items() if server.enabled]
 
 
 def masked(server: McpServer) -> dict:
@@ -87,32 +98,25 @@ def save(incoming: dict[str, McpServer]) -> dict[str, McpServer]:
     Raises ValueError for a bad name or too many servers."""
     if len(incoming) > MAX_SERVERS:
         raise ValueError(f"At most {MAX_SERVERS} connectors.")
-    with _LOCK:
+    for name in incoming:
+        if not _valid_name(name):
+            raise ValueError("A connector's name may only use lowercase letters, digits, - and _.")
+    with config_lock:
+        cfg = read_config()
+        entries = _entries(cfg)
         stored = load()
         for name, server in incoming.items():
-            if not _valid_name(name):
-                raise ValueError("A connector's name may only use lowercase letters, digits, - and _.")
             old = stored.get(name)
             for field in ("env", "headers"):
                 values = getattr(server, field)
                 for key, value in values.items():
                     if value == MASK:
                         values[key] = (getattr(old, field, {}) or {}).get(key, "") if old else ""
-        _write(incoming)
+        # Servers Colony cannot show are not in `stored`, so they are not part of "the whole list" and stay as they are.
+        kept = {n: e for n, e in entries.items() if n not in stored}
+        cfg.setdefault("mcp", {})["servers"] = {**kept, **{n: _entry_for(s, entries.get(n)) for n, s in incoming.items()}}
+        write_config(cfg)
         return incoming
-
-
-def enabled_for_pi() -> dict[str, dict]:
-    """What Pi's MCP adapter is told: the enabled servers, in its own config format."""
-    servers = {}
-    for name, server in load().items():
-        if not server.enabled:
-            continue
-        if server.command:
-            servers[name] = {"command": server.command, "args": server.args, **({"env": server.env} if server.env else {})}
-        else:
-            servers[name] = {"url": server.url, **({"headers": server.headers} if server.headers else {})}
-    return servers
 
 
 def composio(consumer_key: str) -> McpServer:

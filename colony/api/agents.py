@@ -4,12 +4,13 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..core.agents import ReasoningLevel, Role
-from ..core.context import model_catalog, reasoning_param, supports_tools
+from ..core.context import supports_tools
 from ..core.errors import explain
-from ..core.models import MODEL_POOL, PROVIDER_NAMES, known_context_window
+from ..core.models import MODEL_POOL
 from ..core.workspaces import WorkspaceNotFound, get_workspace, save_roles
-from ..llm.http import ProviderError, get_json
-from ..llm.providers import KAGGLE_PREFIX, ping_model
+from ..engine.openclaw import ping_model
+from ..llm.http import ProviderError
+from ..llm.ollama import OLLAMA_CLOUD_MODELS, normalize_ollama_model_id
 
 router = APIRouter()
 
@@ -35,7 +36,7 @@ def get_roles(workspace_id: str | None = None) -> RolesPayload:
 def put_roles(payload: RolesPayload, workspace_id: str | None = None) -> RolesPayload:
     workspace = _workspace(workspace_id)
     for role in payload.roles:
-        if role.tools.any_on and supports_tools(role.model, get_settings()) is False:
+        if role.tools.any_on and not supports_tools(role.model):
             raise HTTPException(status_code=400, detail=(
                 f"{role.name}: the model {role.model} can't use tools. Pick another model, or switch its tools off."))
     try:
@@ -44,85 +45,26 @@ def put_roles(payload: RolesPayload, workspace_id: str | None = None) -> RolesPa
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _capabilities(info: dict | None, context: int | None) -> dict:
-    """What a model can do, as far as OpenRouter's catalog says (None = it doesn't say)."""
-    info = info or {}
-    return {"tools": info.get("tools"), "inputs": info.get("inputs"), "reasoning": info.get("reasoning"),
-            "reasoning_levels": info.get("reasoning_levels"), "context": info.get("context") or context}
-
-
-def _kaggle_models(settings) -> list[dict]:
-    """The models the user's Kaggle server has pulled (empty when no URL is set or the notebook is off)."""
-    if not settings.kaggle_base_url or settings.mock_mode:
-        return []
-    try:
-        data = get_json(f"{settings.kaggle_base_url}/models", timeout=5.0, provider_name="Kaggle")
-    except ProviderError:
-        return []
-    ids = [m["id"] for m in data.get("data") or [] if isinstance(m, dict) and isinstance(m.get("id"), str)]
-    return [{
-        "id": KAGGLE_PREFIX + model_id, "provider": "kaggle", "provider_name": "Kaggle (your GPU)",
-        "source": "kaggle", "source_label": "Kaggle (your GPU)",
-        "label": model_id, "note": "Free", "suggested": False,
-        "capabilities": {"tools": None, "inputs": None, "reasoning": None, "reasoning_levels": None,
-                         "context": settings.kaggle_context_window},
-    } for model_id in ids]
-
-
 @router.get("/models")
 def get_models() -> dict:
-    """Every model the picker can offer: grouped by backend (Ollama, Kaggle, OpenRouter).
-    Each carries its capabilities (files/tools, images, video, reasoning, context) when the catalog is reachable."""
-    settings = get_settings()
-    catalog = model_catalog(settings)
-    from ..llm.ollama import OLLAMA_CLOUD_MODELS, normalize_ollama_model_id
-
+    """The models the picker offers (the Ollama models OpenClaw runs), each with what it can do."""
     models = []
     for m in MODEL_POOL:
-        if m.provider == "ollama":
-            clean = normalize_ollama_model_id(m.model_id)
-            c_info = OLLAMA_CLOUD_MODELS.get(clean, {})
-            caps = {
-                "tools": c_info.get("tools", True),
-                "inputs": ["text"],
-                "reasoning": c_info.get("reasoning", False),
-                "reasoning_levels": None,
-                "context": c_info.get("context", m.context or 128_000),
-            }
-            models.append({
-                "id": m.model_id, "provider": m.provider, "provider_name": "Ollama Cloud / Local",
-                "source": "ollama", "source_label": "Ollama API",
-                "label": m.label, "note": m.note, "suggested": True,
-                "capabilities": caps,
-            })
-        else:
-            models.append({
-                "id": m.model_id, "provider": m.provider, "provider_name": PROVIDER_NAMES.get(m.provider, m.provider),
-                "source": "openrouter", "source_label": "OpenRouter",
-                "label": m.label, "note": m.note, "suggested": True,
-                "capabilities": _capabilities(catalog.get(m.model_id), known_context_window(m.model_id)),
-            })
-
-    models = _kaggle_models(settings) + models
-    listed = {m["id"] for m in models}
-    for model_id, info in sorted(catalog.items(), key=lambda item: item[0]):
-        if model_id in listed:
-            continue
-        maker, _, rest = model_id.partition("/")
-        name = info.get("name") or model_id
-        provider_name, sep, label = name.partition(": ")      # OpenRouter names look like "Google: Gemini 3 Flash"
+        info = OLLAMA_CLOUD_MODELS.get(normalize_ollama_model_id(m.model_id), {})
         models.append({
-            "id": model_id, "provider": maker.lstrip("~"), "provider_name": provider_name if sep else PROVIDER_NAMES.get(maker, maker),
-            "source": "openrouter", "source_label": "OpenRouter",
-            "label": label if sep else name, "note": "Free" if model_id.endswith(":free") else "", "suggested": False,
-            "capabilities": _capabilities(info, None),
+            "id": m.model_id, "provider": "ollama", "provider_name": "Ollama Cloud / Local",
+            "source": "ollama", "source_label": "Ollama API",
+            "label": m.label, "note": m.note, "suggested": True,
+            "capabilities": {"tools": info.get("tools", True), "inputs": ["text", "image", "file"],
+                             "reasoning": info.get("reasoning", False), "reasoning_levels": None,
+                             "context": info.get("context")},
         })
-    return {"models": models, "catalog": bool(catalog)}     # catalog: False = OpenRouter's list could not be read
+    return {"models": models, "catalog": True}
 
 
 class ModelTestRequest(BaseModel):
     model: str = Field(min_length=3, max_length=120)
-    reasoning: ReasoningLevel = "default"     # test with the level the agent will use
+    reasoning: ReasoningLevel = "default"     # sent by older editors; models are tested with their own default
 
 
 @router.post("/models/test")
@@ -133,7 +75,7 @@ def test_model(payload: ModelTestRequest) -> dict:
         return {"ok": True, "seconds": 0.0, "preview": "[mock] OK"}
     try:
         model = payload.model.strip()
-        preview, seconds = ping_model(settings=settings, model=model, reasoning=reasoning_param(model, payload.reasoning, settings))
+        preview, seconds = ping_model(settings, model)
     except ProviderError as exc:
         return {"ok": False, "message": explain(exc, payload.model.strip())}
     return {"ok": True, "seconds": round(seconds, 1), "preview": preview}

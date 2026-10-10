@@ -25,4 +25,4 @@ colony = "colony.cli:main"
 include = ["colony*"]
 
 [tool.setuptools.package-data]
-colony = ["web/*", "web/js/*", "engine/*.ts"]
+colony = ["web/*", "web/js/*", "engine/colony-gate/*"]

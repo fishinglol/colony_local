@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .. import memory
+from ..engine import openclaw
 from ..config import Settings, get_settings
 from ..store.history import delete_conversation
 from ..store.json_store import JsonStore
@@ -197,7 +197,7 @@ def delete_workspace(workspace_id: str) -> None:
             raise ValueError("Keep at least one workspace.")
         _save([w for w in workspaces if w.id != workspace_id])
     delete_conversation(workspace_id)
-    memory.forget(workspace_id)
+    openclaw.remove_agents(get_settings(), workspace_id)
 
 
 def save_roles(workspace_id: str, roles: list[Role]) -> list[Role]:

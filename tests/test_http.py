@@ -79,11 +79,6 @@ def test_network_failure_becomes_provider_error(monkeypatch):
         call()
 
 
-def test_null_content_from_a_reasoning_model_is_not_a_crash():
-    from colony.llm.providers import _extract_text
-    assert _extract_text({"choices": [{"message": {"content": None}}]}, "OpenRouter") == ""
-
-
 def sleeps(monkeypatch):
     recorded = []
     monkeypatch.setattr(http.time, "sleep", recorded.append)
@@ -131,24 +126,6 @@ def test_status_is_recorded_for_http_and_body_errors(monkeypatch):
     with pytest.raises(ProviderError) as c:
         call()
     assert (a.value.status, b.value.status, c.value.status) == (401, 402, None)
-
-
-def test_chat_replies_retry_as_many_times_as_the_setting_says(monkeypatch):
-    from colony.config import get_settings
-    from colony.llm import providers
-
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    monkeypatch.setenv("CHAT_RETRIES", "5")
-    get_settings.cache_clear()
-    seen = {}
-
-    def fake(url, payload, headers, timeout, provider_name, retries=1):
-        seen["retries"] = retries
-        return {"choices": [{"message": {"content": "ok"}}]}
-
-    monkeypatch.setattr(providers, "post_json", fake)
-    providers.generate_openrouter_reply(settings=get_settings(), message="hi", model_hint="a/b")
-    assert seen["retries"] == 5
 
 
 def test_get_json_returns_the_object_and_reports_failures(monkeypatch):

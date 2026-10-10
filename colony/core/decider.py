@@ -1,17 +1,8 @@
-"""Colony Local — Jev decider.
+"""Colony Local — decider.
 
-Asks Jev (TypeSafe's decision model, served by OpenRouter's Decisions API)
-which of the USER-DEFINED roles should answer a message. Each role's `when`
-text becomes one Jev choice criterion, so the user fully controls the rules.
-
-API (https://openrouter.ai/docs/guides/community/jev-tutorial):
-  POST https://openrouter.ai/api/alpha/decisions
-  request:  {"model", "state": {...}, "questions": {"role": {"type": "choice",
-             "instructions", "criteria": {role_id: when}}}}
-  response: {"answers": {"role": {"choice", "confidence", "probabilities"}}, ...}
-
-Auth: the existing openrouter_api_key.
-With LAYA_URL set, the same request goes to a local Laya server (POST /v1/systemone) instead.
+Picks which of the USER-DEFINED roles should answer a message. Each role's `when` text is one choice criterion, so the
+user fully controls the rules. A local Laya server (LAYA_URL, POST /v1/systemone) answers if it is set; otherwise
+nemotron-3-nano on Ollama does; if neither answers, the first role does.
 """
 import json
 import logging
@@ -19,7 +10,6 @@ from dataclasses import dataclass
 
 from ..config import Settings
 from ..llm.http import ProviderError, post_json
-from ..llm.providers import openrouter_headers
 from .agents import Role
 
 logger = logging.getLogger(__name__)
@@ -28,16 +18,16 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class DeciderResult:
     role: Role
-    confidence: float   # Jev's confidence for the chosen role (0–1)
-    source: str         # "jev" | "laya" | "direct" | "only_role" | "fallback"
+    confidence: float   # the decider's confidence for the chosen role (0–1)
+    source: str         # "laya" | "nemotron" | "direct" | "only_role" | "fallback"
 
 
 def decide(message: str, roles: list[Role], settings: Settings, direct_role: Role | None = None) -> DeciderResult:
     """Pick which role answers.
 
-    direct_role set (user messaged a role directly) → skip Jev.
+    direct_role set (user messaged a role directly) → no decision.
     One role only → no decision to make.
-    Any Jev failure → first role, source="fallback" (shown in the UI).
+    Any decider failure → first role, source="fallback" (shown in the UI).
     """
     if direct_role:
         return DeciderResult(role=direct_role, confidence=1.0, source="direct")
@@ -47,8 +37,6 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
         # Laya speaks Jev's protocol; "multilingual" is its checkpoint that reads Thai.
         url, headers, model, source = (f"{settings.laya_url}/v1/systemone", {"Content-Type": "application/json"},
                                        "multilingual", "laya")
-    elif settings.openrouter_api_key:
-        url, headers, model, source = settings.jev_decisions_url, openrouter_headers(settings), settings.jev_model, "jev"
     else:
         ollama_res = decide_via_ollama(message, roles, settings)
         if ollama_res:
@@ -69,7 +57,7 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
         },
     }
     try:
-        # retries=0: Jev sits on the hot path of every message, so fail fast and fall back.
+        # retries=0: the decider sits on the hot path of every message, so fail fast and fall back.
         data = post_json(url, payload, headers, timeout=10.0, provider_name=source.capitalize(), retries=0)
         role_id, confidence = parse_jev_answer(data, [r.id for r in roles])
     except (ProviderError, KeyError, ValueError, TypeError) as exc:

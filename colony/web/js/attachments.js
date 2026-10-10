@@ -3,12 +3,11 @@
 import { api } from './api.js';
 import { $, el, toast } from './dom.js';
 import { closeMenu } from './feed.js';
-import { findModel } from './model-picker.js';
-import { currentWorkspace, state } from './state.js';
+import { state } from './state.js';
 import { openWorkspaceModal } from './workspaces.js';
 
 const MAX_FILES = 10, MAX_MB = 20;
-const NEEDS = { image: 'image', pdf: 'file', video: 'video', audio: 'audio' };   // what OpenRouter lists a model as accepting
+const NEEDS = { image: 'image', pdf: 'file', video: 'video', audio: 'audio' };   // what a model's capabilities must list
 const LABEL = { image: 'images', pdf: 'PDFs', video: 'video', audio: 'audio' };
 const TAG = { image: 'IMG', pdf: 'PDF', video: 'VID', audio: 'AUD', text: 'TXT', file: 'FILE' };
 
@@ -20,13 +19,9 @@ const labels = (kinds) => kinds.map((k) => LABEL[k]).join(' and ');
 export const fileUrl = (ref) => `/api/workspaces/${encodeURIComponent(state.workspaceId)}/attachments/${ref.id}`;
 export const tagOf = (kind) => TAG[kind] || 'FILE';
 
-// Which of these kinds of file can this agent's model not read? (An agent with tools reads images and text only.)
+// Which of these kinds of file can this agent not read? Every agent runs through OpenClaw: images, PDFs and text only.
 export function unreadableBy(role, kinds) {
-  const t = role.tools || {};
-  const hasFolder = Boolean((currentWorkspace() || {}).effective_folder);   // without a project folder, tools stay off
-  const withTools = hasFolder && (t.read === 'allow' || (t.write && t.write !== 'off') || (t.bash && t.bash !== 'off'));
-  const inputs = ((findModel(role.model) || {}).capabilities || {}).inputs;
-  return kinds.filter((k) => NEEDS[k] && ((withTools && k !== 'image') || (inputs && !inputs.includes(NEEDS[k]))));
+  return kinds.filter((k) => k === 'video' || k === 'audio');
 }
 
 export const pendingUploads = () => state.attached.some((a) => a.status === 'uploading');

@@ -1,68 +1,37 @@
-import pytest
 from fastapi.testclient import TestClient
 
 from colony.app import app
 from colony.config import get_settings
-from colony.core import chat, context
-from colony.core.agents import Role
-from colony.llm import http, providers
-from colony.llm.http import ProviderError
+from colony.core import context
+from colony.engine import openclaw
 
 client = TestClient(app)
 
 
-@pytest.fixture(autouse=True)
-def fresh_live_cache(monkeypatch):
-    monkeypatch.setattr(context, "_live_windows", {})
-    monkeypatch.setattr(context, "_live_info", {})
-    monkeypatch.setattr(context, "_live_fetched_at", 0.0)
-
-
-def role(model="z-ai/glm-5.2:free", name="Coder"):
-    return Role(id=name.lower(), name=name, model=model, when="x", instructions="")
-
-
-def msg(kind, text, name=None):
-    m = {"role": kind, "content": text}
+def msg(kind, text, name=None, mid=None):
+    m = {"role": kind, "content": text, "id": mid or text}
     if name:
         m["metadata"] = {"role_name": name}
     return m
 
 
-def live(monkeypatch, sent):
-    """Non-mock mode with a fake provider that records the messages each model receives."""
-    monkeypatch.setenv("MOCK_MODE", "false")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    get_settings.cache_clear()
-    monkeypatch.setattr(chat.memory, "maybe_review_in_background", lambda *a: None)
-
-    def fake(url, payload, headers, timeout, provider_name, retries=1):
-        sent.append(payload["messages"])
-        return {"model": payload["model"], "choices": [{"message": {"content": f"answer {len(sent)}"}}]}
-
-    monkeypatch.setattr(providers, "post_json", fake)
-
-
-# ── token estimates ───────────────────────────────────────────────────────────
-def test_estimates_are_roughly_right_for_english_and_denser_for_thai():
-    assert context.estimate_tokens("") == 0
-    assert context.estimate_tokens("a" * 400) == 100
-    assert context.estimate_tokens("ก" * 300) == 200  # Thai counts ~1.5 chars/token
-
-
 # ── who said what ─────────────────────────────────────────────────────────────
 def test_later_agents_see_earlier_replies_labelled_with_the_speaker(monkeypatch):
     sent = []
-    live(monkeypatch, sent)
-    first = client.post("/api/messages", json={"message": "We sell kites.", "role_id": "reasoning"}).json()
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda s=None: True)
+    monkeypatch.setattr(openclaw, "mark_seen", lambda *a: None)
+
+    def fake_turn(**kw):
+        sent.append(kw["history"])
+        return openclaw.OpenClawTurnResult(reply=f"answer {len(sent)}", model=kw["role_model"], session_user="ome-t")
+
+    monkeypatch.setattr(openclaw, "run_openclaw_turn", fake_turn)
+    client.post("/api/messages", json={"message": "We sell kites.", "role_id": "reasoning"})
     client.post("/api/messages", json={"message": "Write a slogan.", "role_id": "writing"})
-
-    def texts(messages, kind):
-        return [m["content"] for m in messages if m["role"] == kind]
-
-    assert not any("teammates" in t for t in texts(sent[0], "system"))       # nobody else has spoken yet
-    assert "[Thinker] answer 1" in texts(sent[1], "assistant")                 # the writer sees who said it
-    assert any("[brackets]" in t for t in texts(sent[1], "system"))            # ...and is told about teammates
+    assert sent[0] == []                                                                # nobody has spoken yet
+    assert {"role": "assistant", "content": "[Thinker] answer 1"} in sent[1]           # the writer sees who said it
 
 
 def test_a_reply_that_copies_the_label_style_has_it_removed():
@@ -72,105 +41,36 @@ def test_a_reply_that_copies_the_label_style_has_it_removed():
     assert context.strip_self_label("plain", "Coder") == "plain"
 
 
-def test_old_messages_without_a_speaker_are_left_as_they_were():
-    plan = context.plan_history(
-        model="qwen/qwen3.8-27b:free", role=role(), settings=get_settings(), memory_context=None,
-        messages=[msg("user", "hi"), msg("assistant", "hello")],
-    )
-    assert [m["content"] for m in plan.history] == ["hi", "hello"] and plan.attributed is False
+def test_history_keeps_the_newest_messages_up_to_the_limit_and_their_ids():
+    messages = [msg("user", f"hello {i}") for i in range(80)] + [{"role": "assistant", "content": "", "id": "empty"}]
+    history, ids = context.labelled_history(get_settings(), "local", messages)
+    assert len(history) == len(ids) == get_settings().history_max_messages == 60
+    assert history[-1]["content"] == "hello 79" and ids[-1] == "hello 79"
 
 
-# ── small windows ─────────────────────────────────────────────────────────────
-def test_a_small_context_window_drops_the_oldest_messages_first(monkeypatch):
-    monkeypatch.setenv("MAX_OUTPUT_TOKENS", "100")
-    get_settings.cache_clear()
-    monkeypatch.setattr(context, "context_window", lambda model, settings: 1500)
-    messages = [msg("user" if i % 2 == 0 else "assistant", f"m{i:02d} " + "x" * 396) for i in range(12)]  # ~100 tokens each
-    plan = context.plan_history(model="a/b", role=role(), settings=get_settings(), memory_context=None, messages=messages)
-    assert 0 < plan.sent < plan.total == 12
-    assert plan.history[-1]["content"].startswith("m11") and not any(m["content"].startswith("m00") for m in plan.history)
-    assert plan.tokens <= int(1500 * context.FILL_LIMIT) - 100
-
-
-def test_a_big_window_keeps_everything_up_to_the_history_limit(monkeypatch):
-    monkeypatch.setattr(context, "context_window", lambda model, settings: 1_000_000)
-    messages = [msg("user", f"hello {i}") for i in range(80)]
-    plan = context.plan_history(model="a/b", role=role(), settings=get_settings(), memory_context=None, messages=messages)
-    assert plan.sent == get_settings().history_max_messages == 60 and plan.total == 80
-
-
-# ── finding a model's window ──────────────────────────────────────────────────
-def test_pool_models_use_the_built_in_table_without_any_network(monkeypatch):
-    monkeypatch.setenv("MOCK_MODE", "false")
-    get_settings.cache_clear()
-    monkeypatch.setattr(context, "get_json", lambda *a, **k: pytest.fail("network used"))
-    assert context.context_window("z-ai/glm-5.2:free", get_settings()) == 32_768
-
-
-def test_unknown_models_are_looked_up_once_in_openrouters_catalog(monkeypatch):
-    monkeypatch.setenv("MOCK_MODE", "false")
-    get_settings.cache_clear()
-    calls = []
-
-    def fake_catalog(url, timeout, provider_name, headers=None):
-        calls.append(url)
-        return {"data": [{"id": "lab/new-model", "context_length": 50_000}, {"id": "bad"}]}
-
-    monkeypatch.setattr(context, "get_json", fake_catalog)
-    assert context.context_window("lab/new-model", get_settings()) == 50_000
-    assert context.context_window("lab/new-model", get_settings()) == 50_000
-    assert context.context_window("lab/other", get_settings()) is None
-    assert len(calls) == 1
-
-
-def test_a_failed_catalog_lookup_gives_unknown_and_is_not_retried_every_time(monkeypatch):
-    monkeypatch.setenv("MOCK_MODE", "false")
-    get_settings.cache_clear()
-    calls = []
-
-    def down(url, timeout, provider_name, headers=None):
-        calls.append(1)
-        raise ProviderError("offline")
-
-    monkeypatch.setattr(context, "get_json", down)
-    assert context.context_window("lab/x", get_settings()) is None
-    assert context.context_window("lab/x", get_settings()) is None
-    assert len(calls) == 1
+# ── windows ───────────────────────────────────────────────────────────────────
+def test_windows_come_from_the_ollama_table_else_the_default():
+    s = get_settings()
+    assert context.context_window("ollama/gemma4:31b", s) == 262_144
+    assert context.context_window("ollama/never-heard-of-it", s) == s.ollama_context_window
+    assert context.supports_tools("ollama/gemma4:31b") and context.supports_tools("ollama/x")
 
 
 # ── the gauge endpoint ────────────────────────────────────────────────────────
-def test_context_endpoint_reports_each_agent_and_grows_with_the_chat():
+def test_context_endpoint_shows_the_prompt_size_openclaw_reported(monkeypatch):
     empty = {a["role_id"]: a for a in client.get("/api/context").json()["agents"]}
     assert set(empty) == {"reasoning", "chitchat", "writing", "coding"}
-    assert empty["coding"]["window"] == 32_768 and empty["coding"]["messages_total"] == 0
+    assert empty["coding"]["used_tokens"] is None and empty["coding"]["percent"] is None      # no turn yet
+    assert empty["coding"]["window"] == 262_144 and empty["coding"]["messages_total"] == 0
 
-    conv = client.post("/api/messages", json={"message": "hello " * 200, "role_id": "coding"}).json()["workspace_id"]
-    client.post("/api/messages", json={"message": "and more " * 200, "role_id": "coding"})
-    later = {a["role_id"]: a for a in client.get(f"/api/context?workspace_id={conv}").json()["agents"]}
-    assert later["coding"]["messages_total"] == 4 and later["coding"]["messages_sent"] == 4
-    assert later["coding"]["used_tokens"] > empty["coding"]["used_tokens"]
-    assert later["coding"]["percent"] > empty["coding"]["percent"]
-    # same chat, but the 32k agent is a bigger fraction of its window than the 1M one
-    assert later["coding"]["percent"] > later["chitchat"]["percent"]
+    settings = get_settings()
+    openclaw._record_usage(settings, openclaw.agent_id_for("local", "coding"), "ollama/gpt-oss:120b", 26_214)
+    row = next(a for a in client.get("/api/context").json()["agents"] if a["role_id"] == "coding")
+    assert row["used_tokens"] == 26_214 and row["percent"] == 10.0
+    assert openclaw.last_prompt_tokens(settings, "nobody") is None
 
 
-def test_an_agent_on_a_model_with_no_known_window_shows_tokens_but_no_percent():
-    client.put("/api/roles", json={"roles": [{"id": "x", "name": "X", "model": "lab/mystery", "when": "any", "instructions": ""}]})
+def test_models_without_a_table_entry_use_the_default_window():
+    client.put("/api/roles", json={"roles": [{"id": "x", "name": "X", "model": "ollama/mystery:1b", "when": "any", "instructions": ""}]})
     row = client.get("/api/context").json()["agents"][0]
-    assert row["window"] is None and row["percent"] is None and row["used_tokens"] > 0
-
-
-def test_a_long_pasted_update_is_accepted_and_counts_toward_the_gauge():
-    long_update = "Status update: shipped the kite landing page. " * 1000  # ~46k characters
-    r = client.post("/api/messages", json={"message": long_update, "role_id": "coding"})
-    assert r.status_code == 200
-    conv = r.json()["workspace_id"]
-    row = next(a for a in client.get(f"/api/context?workspace_id={conv}").json()["agents"] if a["role_id"] == "coding")
-    assert row["used_tokens"] > 10_000 and row["percent"] > 30  # a big share of the 32k window
-
-
-def test_every_model_is_told_the_current_date_and_time():
-    from datetime import datetime
-    from colony.llm.providers import system_messages
-    text = " ".join(m["content"] for m in system_messages("acme/m", "Planner", "", None))
-    assert "Right now it is " + datetime.now().astimezone().strftime("%A %Y-%m-%d") in text
+    assert row["window"] == get_settings().ollama_context_window and row["percent"] is None

@@ -1,15 +1,16 @@
-// Settings (API key) and the shared-memory viewer.
+// Settings (API key, OpenClaw Plugins Manager) and the shared-memory viewer.
 import { api } from './api.js';
-import { $, closeModal, openModal, toast } from './dom.js';
+import { $, closeModal, el, openModal, toast } from './dom.js';
 import { currentWorkspace, state } from './state.js';
 import { ensureModels } from './model-picker.js';
 
+let cachedPlugins = [];
+
 export async function refreshHealth() {
   const h = await api('/health');
-  $('keyDot').style.background = h.has_openrouter_key ? 'var(--ok)' : 'var(--warn)';
-  $('keyDot').title = h.has_openrouter_key ? 'API key set' : 'No API key yet';
+  $('keyDot').style.background = h.has_ollama_key ? 'var(--ok)' : 'var(--warn)';
+  $('keyDot').title = h.has_ollama_key ? 'Ollama key set' : 'No Ollama key (fine for a local Ollama)';
   $('dataDir').textContent = h.data_dir;
-  state.tools = h.tools || {};
   return h;
 }
 
@@ -25,93 +26,182 @@ export async function checkOpenClawGateway() {
       dot.className = 'openclaw-dot online';
       label.textContent = 'OpenClaw Gateway 🟢';
       pill.title = `OpenClaw Gateway Connected (${status.url})`;
+      if ($('gwStatusOnline')) $('gwStatusOnline').textContent = '🟢 Online (59 Tools Active)';
     } else {
       dot.className = 'openclaw-dot offline';
       label.textContent = 'OpenClaw Gateway 🔴';
       pill.title = `OpenClaw Gateway Offline (${status.url}). Run 'pnpm openclaw gateway' in Terminal.`;
+      if ($('gwStatusOnline')) $('gwStatusOnline').textContent = '🔴 Offline';
     }
   } catch {
     dot.className = 'openclaw-dot offline';
     label.textContent = 'OpenClaw Gateway 🔴';
     pill.title = 'OpenClaw Gateway Offline';
+    if ($('gwStatusOnline')) $('gwStatusOnline').textContent = '🔴 Offline';
+  }
+}
+
+function initSettingsTabs() {
+  const tabs = [
+    { btnId: 'tabBtnPlugins', paneId: 'tabPlugins' },
+    { btnId: 'tabBtnProviders', paneId: 'tabProviders' },
+    { btnId: 'tabBtnGateway', paneId: 'tabGateway' },
+  ];
+
+  tabs.forEach(({ btnId, paneId }) => {
+    const btn = $(btnId);
+    if (!btn) return;
+    btn.onclick = () => {
+      tabs.forEach((t) => {
+        $(t.btnId)?.classList.remove('active');
+        $(t.paneId)?.classList.remove('active');
+      });
+      btn.classList.add('active');
+      $(paneId)?.classList.add('active');
+    };
+  });
+}
+
+export async function loadOpenClawPlugins() {
+  const container = $('pluginsCatalogContainer');
+  const countBadge = $('pluginsCountBadge');
+  if (!container) return;
+
+  try {
+    const res = await api('/openclaw/plugins');
+    cachedPlugins = res.plugins || [];
+    if (countBadge) {
+      countBadge.textContent = `${res.total_active} / ${res.total_available} ปลั๊กอินเปิดใช้งานอยู่`;
+    }
+    renderPluginCategories(res.categories, cachedPlugins, container);
+  } catch (err) {
+    container.innerHTML = `<div style="color:var(--err);padding:14px">โหลดปลั๊กอินไม่สำเร็จ: ${err.message}</div>`;
+  }
+}
+
+function renderPluginCategories(categories, plugins, container) {
+  container.innerHTML = '';
+
+  (categories || []).forEach((cat) => {
+    const catPlugins = plugins.filter((p) => p.category === cat.id);
+    if (!catPlugins.length) return;
+
+    const section = el('div', 'plugin-category-section');
+    const header = el('div', 'plugin-category-title', cat.title);
+    const grid = el('div', 'plugin-cards-grid');
+
+    catPlugins.forEach((plugin) => {
+      const card = el('div', 'plugin-card');
+      const left = el('div', 'plugin-card-left');
+      const icon = el('div', 'plugin-icon', plugin.icon || '🧩');
+      const info = el('div', 'plugin-info');
+
+      // Title row with badge
+      const titleRow = el('div', 'plugin-title-row');
+      const name = el('span', 'plugin-name', plugin.name);
+      const badge = el('span', `plugin-badge ${plugin.recommendation}`, plugin.recommendation_label);
+      titleRow.append(name, badge);
+
+      const desc = el('div', 'plugin-desc', plugin.description);
+      const reason = el('div', 'plugin-reason', `💡 ${plugin.recommendation_reason}`);
+      info.append(titleRow, desc, reason);
+      left.append(icon, info);
+
+      // Switch
+      const switchLabel = el('label', 'switch-label');
+      const input = el('input');
+      input.type = 'checkbox';
+      input.checked = plugin.enabled;
+      input.onchange = async () => {
+        const nextState = input.checked;
+        try {
+          await api('/openclaw/plugins', {
+            method: 'POST',
+            body: JSON.stringify({ plugin_id: plugin.id, enabled: nextState }),
+          });
+          plugin.enabled = nextState;
+          toast(`${plugin.name}: ${nextState ? 'เปิดแล้ว 🟢' : 'ปิดแล้ว'}`);
+          checkOpenClawGateway();
+          const activeCount = cachedPlugins.filter((p) => p.enabled).length;
+          $('pluginsCountBadge').textContent = `${activeCount} / ${cachedPlugins.length} ปลั๊กอินเปิดใช้งานอยู่`;
+        } catch (err) {
+          input.checked = !nextState; // revert
+          toast(`เกิดข้อผิดพลาด: ${err.message}`);
+        }
+      };
+
+      const slider = el('span', 'switch-slider');
+      switchLabel.append(input, slider);
+
+      card.append(left, switchLabel);
+      grid.appendChild(card);
+    });
+
+    section.append(header, grid);
+    container.appendChild(section);
+  });
+}
+
+async function enableAllRecommended() {
+  const recIds = cachedPlugins.filter((p) => p.recommendation === 'recommended').map((p) => p.id);
+  const payload = {};
+  recIds.forEach((id) => { payload[id] = true; });
+
+  try {
+    await api('/openclaw/plugins/batch', {
+      method: 'POST',
+      body: JSON.stringify({ plugins: payload }),
+    });
+    toast('เปิดใช้งานปลั๊กอินแนะนำทั้งหมดแล้ว ✨');
+    await loadOpenClawPlugins();
+    checkOpenClawGateway();
+  } catch (err) {
+    toast(`เกิดข้อผิดพลาด: ${err.message}`);
   }
 }
 
 export async function openSettings() {
   const s = await api('/settings');
-  $('fKey').value = '';
-  $('fKaggle').value = s.kaggle_base_url || '';
   $('fOllamaUrl').value = s.ollama_base_url || '';
   $('fOllamaKey').value = '';
   $('fOpenclawUrl').value = s.openclaw_gateway_url || '';
   $('fOpenclawToken').value = '';
-
-  if (s.has_openrouter_key) {
-    $('keyStatus').innerHTML = `<span style="color:var(--ok, #3fb950);font-weight:600">🟢 บันทึกแล้ว (Saved):</span> <code>${s.openrouter_key_masked}</code>`;
-    $('fKey').placeholder = '•••••••••••••••• (เว้นว่างไว้เพื่อใช้ Key เดิม)';
-  } else {
-    $('keyStatus').textContent = 'ยังไม่ได้ตั้งค่า Key (No key set yet)';
-    $('fKey').placeholder = 'sk-or-v1-…';
-  }
-
-  if (s.has_ollama_key) {
-    $('ollamaKeyStatus').innerHTML = `<span style="color:var(--ok, #3fb950);font-weight:600">🟢 บันทึกแล้ว (Saved):</span> <code>${s.ollama_key_masked}</code>`;
-    $('fOllamaKey').placeholder = '•••••••••••••••• (เว้นว่างไว้เพื่อใช้ Key เดิม)';
-  } else {
-    $('ollamaKeyStatus').textContent = 'ยังไม่ได้ตั้งค่า Key (No key set)';
-    $('fOllamaKey').placeholder = 'Bearer / API key if required';
-  }
-
-  if (s.has_openclaw_token) {
-    $('openclawTokenStatus').innerHTML = `<span style="color:var(--ok, #3fb950);font-weight:600">🟢 บันทึกแล้ว (Saved):</span> <code>${s.openclaw_token_masked}</code>`;
-    $('fOpenclawToken').placeholder = '•••••••••••••••• (เว้นว่างไว้เพื่อใช้ Token เดิม)';
-  } else {
-    $('openclawTokenStatus').textContent = 'ไม่ได้ระบุ Token (Optional)';
-    $('fOpenclawToken').placeholder = 'Bearer token if authentication is enabled';
-  }
-
+  $('ollamaKeyStatus').textContent = s.has_ollama_key ? `Current key: ${s.ollama_key_masked}` : 'No key set.';
+  $('openclawTokenStatus').textContent = s.has_openclaw_token ? `Current token: ${s.openclaw_token_masked}` : 'No token set (optional).';
   $('settingsError').textContent = '';
+
+  initSettingsTabs();
+  const btnAll = $('btnEnableAllRec');
+  if (btnAll) btnAll.onclick = enableAllRecommended;
+
   openModal('settingsModal');
+  loadOpenClawPlugins();
+  checkOpenClawGateway();
 }
 
 export async function saveSettings() {
   try {
-    const payload = {};
-    const keyVal = $('fKey').value.trim();
-    if (keyVal) payload.openrouter_api_key = keyVal;
-
-    const kaggleVal = $('fKaggle').value.trim();
-    if (kaggleVal) payload.kaggle_base_url = kaggleVal;
-
-    const ollamaUrlVal = $('fOllamaUrl').value.trim();
-    if (ollamaUrlVal) payload.ollama_base_url = ollamaUrlVal;
-
-    const ollamaKeyVal = $('fOllamaKey').value.trim();
-    if (ollamaKeyVal) payload.ollama_api_key = ollamaKeyVal;
-
-    const openclawUrlVal = $('fOpenclawUrl').value.trim();
-    if (openclawUrlVal) payload.openclaw_gateway_url = openclawUrlVal;
-
-    const openclawTokenVal = $('fOpenclawToken').value.trim();
-    if (openclawTokenVal) payload.openclaw_gateway_token = openclawTokenVal;
-
     await api('/settings', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ollama_base_url: $('fOllamaUrl').value,
+        ollama_api_key: $('fOllamaKey').value,
+        openclaw_gateway_url: $('fOpenclawUrl').value,
+        openclaw_gateway_token: $('fOpenclawToken').value,
+      }),
     });
     closeModal('settingsModal'); toast('Saved'); refreshHealth();
     checkOpenClawGateway();
-    state.modelPool = []; ensureModels();   // reload so the Kaggle/Ollama server's models show up in the picker
+    state.modelPool = []; ensureModels();   // reload so the Ollama server's models show up in the picker
   } catch (err) { $('settingsError').textContent = err.message; }
 }
 
 export async function openMemory() {
   const ws = currentWorkspace();
-  $('memoryHint').textContent = `What every agent in ${ws ? ws.name : 'this workspace'} knows about you (Curated MEMORY.md, Episodic Daily Notes & Dreaming). Say "remember …" in chat to add to it.`;
-  const [ctxRes, dailyRes, dreamsRes] = await Promise.all([
+  $('memoryHint').textContent = `What every agent in ${ws ? ws.name : 'this workspace'} knows about you (MEMORY.md, USER.md and daily notes). Say "remember …" in chat to add to it.`;
+  const [ctxRes, dailyRes] = await Promise.all([
     api(`/memory/context?workspace_id=${encodeURIComponent(state.workspaceId)}`),
     api(`/memory/daily?workspace_id=${encodeURIComponent(state.workspaceId)}`).catch(() => ({ notes: [] })),
-    api(`/memory/dreams?workspace_id=${encodeURIComponent(state.workspaceId)}`).catch(() => ({ dreams: '' })),
   ]);
 
   let display = ctxRes.context || '';
@@ -120,9 +210,6 @@ export async function openMemory() {
     for (const n of dailyRes.notes.slice(0, 3)) {
       display += `\n📅 ${n.date}:\n${n.content.trim()}\n`;
     }
-  }
-  if (dreamsRes.dreams && dreamsRes.dreams.trim()) {
-    display += (display ? '\n\n' : '') + '═══ Dreaming Consolidation Log (DREAMS.md) ═══\n' + dreamsRes.dreams.trim();
   }
 
   $('memoryView').textContent = display || 'Nothing yet. Chat a bit, or say "remember that …".';

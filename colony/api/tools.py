@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..core.approvals import approvals
 from ..core.context import supports_tools
+from ..core.gate import decide
 
 router = APIRouter()
 
@@ -19,6 +20,18 @@ def get_approvals() -> dict:
     return {"approvals": approvals.pending()}
 
 
+class GateCall(BaseModel):
+    agent_id: str
+    tool: str
+    params: dict = {}
+
+
+@router.post("/approvals/gate")
+def gate(call: GateCall) -> dict:
+    """Called by OpenClaw (colony-gate.ts) before each tool call. Blocks while the user is being asked."""
+    return decide(get_settings(), call.agent_id, call.tool, call.params)
+
+
 @router.post("/approvals/{approval_id}")
 def answer_approval(approval_id: str, answer: Answer) -> dict:
     if not approvals.resolve(approval_id, answer.approve):
@@ -28,5 +41,5 @@ def answer_approval(approval_id: str, answer: Answer) -> dict:
 
 @router.get("/models/tools")
 def model_supports_tools(model: str) -> dict:
-    """true / false / null (unknown). The editor locks the tool switches when this is false."""
-    return {"supported": supports_tools(model.strip(), get_settings())}
+    """true / false. The editor locks the tool switches when this is false."""
+    return {"supported": supports_tools(model.strip())}

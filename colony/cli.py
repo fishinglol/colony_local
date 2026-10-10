@@ -51,6 +51,58 @@ def _start_laya() -> None:
     print(f"🧭  Laya (who answers in # mix) starting on port {LAYA_PORT} …")
 
 
+OPENCLAW_PORT = 18789
+
+
+def _start_openclaw() -> None:
+    """Run the OpenClaw Gateway from openclaw-main 2/ unless something already answers on its port; stop it with us."""
+    import os
+    import shutil
+    import socket
+    import subprocess
+    import threading
+    import time
+    import urllib.request
+    from pathlib import Path
+
+    from .config import get_settings
+
+    settings = get_settings()
+    if settings.mock_mode or not settings.openclaw_gateway_enabled:
+        return
+    source = Path(__file__).resolve().parent.parent / "openclaw-main 2"
+    with socket.socket() as probe:
+        if probe.connect_ex(("127.0.0.1", OPENCLAW_PORT)) == 0:
+            print(f"🦞  OpenClaw Gateway already running on port {OPENCLAW_PORT} — using it.")
+            return
+    if not (source / "openclaw.mjs").exists() or not shutil.which("node"):
+        print("⚠️  OpenClaw Gateway not started: needs Node (>=24.16) and openclaw-main 2/ (see memory-bank/techContext.md).")
+        return
+    log_path = Path.home() / ".colony" / "openclaw.log"
+    gateway = subprocess.Popen(["node", "openclaw.mjs", "gateway", "run", "--allow-unconfigured"], cwd=source,
+                               env={**os.environ, "COLONY_URL": f"http://{settings.host}:{settings.port}"},   # for colony-gate.ts
+                               stdout=open(log_path, "w"), stderr=subprocess.STDOUT, start_new_session=True)
+    # Uvicorn re-raises SIGTERM, so atexit never runs: a tiny shell watches our pid and stops the gateway after us.
+    subprocess.Popen(["sh", "-c", f"while kill -0 {os.getpid()} 2>/dev/null; do sleep 2; done; kill -TERM -{gateway.pid}"],
+                     start_new_session=True)
+    print(f"🦞  OpenClaw Gateway starting on port {OPENCLAW_PORT} (takes ~50 s; chat shows a not-ready notice until then) …")
+
+    def report() -> None:
+        for _ in range(60):
+            if gateway.poll() is not None:
+                print(f"⚠️  OpenClaw Gateway exited (code {gateway.returncode}) — see {log_path}")
+                return
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{OPENCLAW_PORT}/readyz", timeout=1)
+                print("🦞  OpenClaw Gateway ready.")
+                return
+            except OSError:
+                time.sleep(2)
+        print(f"⚠️  OpenClaw Gateway still not ready after 2 min — see {log_path}")
+
+    threading.Thread(target=report, daemon=True).start()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="colony",
@@ -87,6 +139,7 @@ def main() -> None:
     from .config import ensure_env_file, get_settings
     ensure_env_file()
     _start_laya()
+    _start_openclaw()
 
     if not args.no_open:
         import threading

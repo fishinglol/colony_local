@@ -1,7 +1,32 @@
 # Progress — Colony Local
-(Newest first within each phase. Dates are 2026-09-24 → 2026-09-29.)
+> **2026-10-09:** Direction changed to OpenClaw-first (Colony = UI shell). A ponytail-audit of the repo produced the cut list
+> in `activeContext.md`. No code removed yet. The "Done" history below stays true for what was built, but items for Pi,
+> MCP/Composio, Compaction, own memory layer and Kaggle provider are slated to be replaced by OpenClaw equivalents.
+(Newest first within each phase. Dates are 2026-09-24 → 2026-10-09.)
 
 ## Done ✅
+
+### OpenClaw Gateway Integration, Plugin Manager, & Capability Matrix (2026-10-09)
+- **OpenClaw Gateway Core Engine (`colony/engine/openclaw.py`):**
+  - Integrated OpenClaw Gateway running locally on port 18789 as Colony's primary execution engine.
+  - Implemented `run_openclaw_turn` supporting streaming, multi-turn history, project folder context, and tool execution.
+  - Connected `colony/core/chat.py` and `colony/core/context.py` to route tool-capable agents through OpenClaw Gateway.
+- **Categorized OpenClaw Plugin Manager (`colony/api/plugins.py`, `colony/web/js/settings.js`):**
+  - Built full REST API (`GET /api/openclaw/plugins`, `POST /api/openclaw/plugins`, `POST /api/openclaw/plugins/batch`) managing 18 real OpenClaw plugins across 5 categories: Web & Search, Automation & Scheduling, Code & Sandbox, Memory & Brain, and External Integrations.
+  - Redesigned Settings modal with 3 tabs: `🔌 OpenClaw Plugins`, `🤖 AI Providers & Keys`, `🖥️ Gateway Status`.
+  - Added status badges (`🟢 แนะนำเปิด`, `⚪ ทางเลือก`, `⚠️ ขั้นสูง`), human-readable descriptions, hot-reload switches, and one-click "✨ เปิดปลั๊กอินแนะนำทั้งหมด" preset. Directly mutates `~/.openclaw/openclaw.json` (`plugins.entries`) and invokes Gateway hot-reload without restarts.
+- **Agent Capability & Tool Matrix (`colony/web/js/agent-editor.js`):**
+  - Redesigned Agent Editor modal with 4 discrete Capability Cards: Web Search (`web_search`), Read Files (`read`), Write & Edit Files (`write`), and Shell Execution (`bash`).
+  - Added role presets: Thinker (Web+Read), Buddy (Web only), Writer (Web+Read+Write), Coder (All four). Persisted to `~/.colony/workspaces.json`.
+- **System Prompt Pairing & Model Grounding:**
+  - Injected strict real-time grounding prompt into `colony/engine/openclaw.py`, pairing local Ollama models with OpenClaw tool schema.
+  - Mandated that models never guess live Bitcoin/crypto prices, stock tickers, or 2026 facts; models are strictly directed to call `web_search`.
+  - Disabled 2-stage `toolSearch` meta-tool (`"toolSearch": false` in `~/.openclaw/openclaw.json`) so DuckDuckGo `web_search` is exposed directly as a first-class tool for local models.
+  - Filtered non-OpenClaw models (`kaggle/...`) from `x-openclaw-model` header to safely default to `ollama/nemotron-3-super`.
+- **End-to-End Real-World Verification:**
+  - Verified live Bitcoin price query: accurately returned $82k range via DuckDuckGo search from CoinMarketCap/Binance.
+  - Verified 2026 iPhone query: accurately returned iPhone 18 Pro / A20 Pro specs.
+  - Verified 4 daemons operational simultaneously: Ollama (11434), Laya (8790), Colony (8765), OpenClaw Gateway (18789).
 
 ### Current date in every prompt (2026-10-01)
 `providers._identity_system_message` now adds "Right now it is <weekday YYYY-MM-DD HH:MM> (the user's local time)…" so
@@ -172,6 +197,13 @@ is refused with 400). Idea not built: send PDFs through OpenRouter's file-parser
 - Audit bugs fixed (Jev parser, strict memory scan lying about success, multi-line key injection, etc.).
 
 ## Remaining / next 🔜
+### OpenClaw-first migration (added 2026-10-09, in order, owner says go per step)
+0. ✅ Pi + own agent loop removed (see activeContext).
+1. Decide how `openclaw-main 2/` lives in the repo (submodule / gitignore / vendor) and get it running from source.
+2. Make `colony.cli` start/stop the OpenClaw Gateway from that folder; show its status in the UI.
+3. ✅ compaction handed to OpenClaw (2026-10-10). (see `openclaw-capabilities.md`, order revised there) Verify OpenClaw can replace: approvals to UI, session compaction, multiple agents/rooms, attachments.
+4. ✅ attachments (images) via OpenClaw (2026-10-10). ✅ memory handed to OpenClaw (2026-10-10). ✅ MCP moved to OpenClaw (2026-10-10). Delete Pi stack and own tool loop (see cut list in `activeContext.md`), then hand over MCP, memory, compaction.
+5. Prune tests, rewrite the legacy sections of `systemPatterns.md`, commit when the owner asks.
 - Owner moves their real workspace onto the Kaggle models; fix what surfaces.
 - Commit the memory-bank move + 2026-09-29 work (no remote yet).
 - Memory review / compaction on a Kaggle model; Qwen3 thinking control; auth on the tunnel; "is Kaggle up?" indicator.

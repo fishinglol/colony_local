@@ -1,4 +1,9 @@
 # Tech Context — Colony Local
+> **2026-10-09:** Backend runtime is moving to **OpenClaw run from source** (`openclaw-main 2/`, Node, package `openclaw`
+> v2026.9.8) with Colony as the UI. Colony is started by `colony.cli`; the target is for it to also start/stop the OpenClaw
+> Gateway (`:18789`). Python deps stay at 5 (fastapi, uvicorn, pydantic, pydantic-settings, certifi). New prerequisite: Node +
+> a working install/build of `openclaw-main 2` (gitignored, v2026.9.8, already built with `dist/`; start: `node openclaw.mjs gateway run --allow-unconfigured`; readiness: `/readyz`) (its `node_modules` looked incomplete on 2026-10-09; unverified). Pi/`pi-runtime`
+> goes away.
 
 All commands run from the repo root `~/Desktop/Colony-Local` (there is no `local/` folder any more).
 
@@ -10,17 +15,16 @@ All commands run from the repo root `~/Desktop/Colony-Local` (there is no `local
   origin → no CORS, deliberately). No bundler, no framework, no npm for the UI.
 - **Native window:** Tauri 2 (Rust 1.98, `tauri` crate 2.11.x, npm `@tauri-apps/cli` ^2,
   Node 24; `tauri-plugin-dialog` for the folder picker).
-- **Tool engine:** Pi `@earendil-works/pi-coding-agent` **0.87.1** (MIT, TypeScript, needs Node ≥22.19) +
-  `pi-mcp-adapter`, pinned in `pi-runtime/package.json` (~437 MB of node_modules).
-- **Models:** OpenRouter (any id; OpenAI is a legacy plain-chat fallback) **or the owner's Kaggle GPU**: ids
-  `kaggle/<ollama name>` → Ollama behind a cloudflared quick tunnel in a Kaggle notebook (`kaggle/colony_server.py`).
-  Current Kaggle models: gemma4:12b, ornith:9b, qwen3.5:9b (all tool-capable; see activeContext "Model shootout").
-- **Decider:** Laya (`laya[serve]==0.3.21`, Apache-2.0, mmBERT "multilingual" checkpoint ~322M, non-generative) in
-  `laya-runtime/.venv` — Python 3.11 (pyenv 3.11.13), torch 2.2.2, transformers <5, numpy <2 (the only combo that runs
-  on an Intel Mac). Weights in `~/.cache/huggingface`. Started by `colony` on port 8790. Jev (OpenRouter) otherwise.
-- **Owner's hardware:** MacBook Pro 13" 2017, Intel i5 dual-core 2.3 GHz, 8 GB RAM, Intel Iris Plus 640, macOS Ventura
-  13.7.8 — cannot run chat LLMs locally (hence Kaggle); fine for Laya (~770 MB RAM).
-- **Kaggle:** free 2× Tesla T4 (15 GB each), 31 GB RAM, ~57 GB disk, ~30 GPU-hours/week, runs up to 12 h.
+- **Tool engine:** OpenClaw Gateway (`openclaw gateway run --allow-unconfigured` on port 18789; Node 24, pnpm)
+  and legacy Pi `@earendil-works/pi-coding-agent` **0.87.1** in `pi-runtime/`.
+- **Models:** OpenClaw local models (via Ollama on port 11434: `ollama/nemotron-3-super`, `ollama/nemotron-3-nano`, `ollama/gemma4`, `ollama/qwen3.5`),
+  OpenRouter (when key provided), **or the owner's Kaggle GPU** (`kaggle/<name>`).
+- **Decider:** Laya (`laya[serve]==0.3.21`, Apache-2.0, mmBERT "multilingual" checkpoint ~322M) running on port 8790.
+- **Multi-daemon Local Topology:**
+  1. `ollama serve` (port 11434) — Local model inference backend.
+  2. `laya-runtime/serve.py` (port 8790) — Local intent routing.
+  3. `colony.cli` (port 8765) — Multi-agent orchestrator & Web UI.
+  4. `openclaw gateway` (port 18789) — Core agent runner, tool executor & plugin host.
 
 ## How to run / verify
 ```bash

@@ -57,8 +57,8 @@ function renderHeader() {
     $('editAgentBtn').style.display = '';
   } else {
     $('barTitle').textContent = '# mix';
-    $('barSub').textContent = `Jev picks who answers · ${state.roles.map((r) => r.name).join(', ')}`;
-    $('prompt').placeholder = 'Message #mix — Jev picks the right agent…';
+    $('barSub').textContent = `Laya picks who answers · ${state.roles.map((r) => r.name).join(', ')}`;
+    $('prompt').placeholder = 'Message #mix — Laya picks the right agent…';
     $('composerHint').textContent = 'Every agent in this workspace shares one conversation and its memory, so you never repeat yourself.';
     $('editAgentBtn').style.display = 'none';
   }

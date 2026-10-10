@@ -31,48 +31,21 @@ def test_parse_rejects_unknown_choice():
         decider.parse_jev_answer(bad, IDS)
 
 
-def _with_key(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+def _laya(monkeypatch):
+    monkeypatch.setenv("LAYA_URL", "http://127.0.0.1:8790")
     get_settings.cache_clear()
     return get_settings()
 
 
-def test_decide_sends_user_rules_and_uses_jev_choice(monkeypatch):
-    settings = _with_key(monkeypatch)
-    sent = {}
-
-    def fake_urlopen(req, timeout, context):
-        sent.update(json.loads(req.data))
-        return io.BytesIO(json.dumps(DOC_RESPONSE).encode())
-
-    monkeypatch.setattr(http.urllib.request, "urlopen", fake_urlopen)
-    result = decider.decide("draft an email", list(DEFAULT_ROLES), settings)
-
-    assert sent["state"] == {"message": "draft an email"}
-    assert sent["questions"]["role"]["criteria"] == {r.id: r.when for r in DEFAULT_ROLES}
-    assert (result.role.id, result.source, result.confidence) == ("writing", "jev", 0.67)
-
-
-def test_decide_falls_back_to_first_role_on_error(monkeypatch):
-    settings = _with_key(monkeypatch)
-
-    def boom(*a, **k):
-        raise urllib.error.URLError("offline")
-
-    monkeypatch.setattr(http.urllib.request, "urlopen", boom)
-    result = decider.decide("hi", list(DEFAULT_ROLES), settings)
-    assert (result.role.id, result.source) == (DEFAULT_ROLES[0].id, "fallback")
-
-
-def test_direct_role_and_single_role_skip_jev(monkeypatch):
-    settings = _with_key(monkeypatch)
-    monkeypatch.setattr(http.urllib.request, "urlopen", lambda *a, **k: pytest.fail("Jev called"))
+def test_direct_role_and_single_role_skip_the_decider(monkeypatch):
+    settings = _laya(monkeypatch)
+    monkeypatch.setattr(http.urllib.request, "urlopen", lambda *a, **k: pytest.fail("decider called"))
     writer = DEFAULT_ROLES[2]
     assert decider.decide("x", list(DEFAULT_ROLES), settings, direct_role=writer).source == "direct"
     assert decider.decide("x", [writer], settings).source == "only_role"
 
 
-def test_laya_takes_jevs_place_without_any_key(monkeypatch):
+def test_laya_decides_without_any_key(monkeypatch):
     monkeypatch.setenv("LAYA_URL", "http://127.0.0.1:8790")
     get_settings.cache_clear()
     sent = {}

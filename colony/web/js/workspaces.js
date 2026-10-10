@@ -22,7 +22,7 @@ export async function openWorkspace(id) {
   const ws = state.workspaces.find((w) => w.id === (id || remembered())) || state.workspaces[0];
   const [roles, messages] = await Promise.all([api(`/roles?workspace_id=${ws.id}`), api(`/workspaces/${ws.id}/messages`)]);
   state.workspaceId = ws.id; remember(ws.id);
-  state.roles = roles.roles; state.messages = messages.messages; state.compaction = messages.compaction;
+  state.roles = roles.roles; state.messages = messages.messages;
   state.target = null; state.approvals = [];
   $('sidebar').classList.remove('show');
   renderSidebar(); renderFeed(); refreshContext();

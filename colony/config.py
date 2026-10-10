@@ -15,20 +15,6 @@ _ENV_FILE = LOCAL_DATA_DIR / ".env"
 
 
 class Settings(BaseSettings):
-    # ── AI providers ──────────────────────────────────────────────────────────
-    # Primary: OpenRouter. Fallback: OpenAI. Same convention as Colony backend.
-    openrouter_api_key: str | None = None
-    openrouter_default_model: str = "anthropic/claude-haiku-4.5"
-    openrouter_routing_model: str = "deepseek/deepseek-v4.1-flash"
-    openrouter_timeout_seconds: float = 120.0
-    # How many times to retry a chat reply that fails for a temporary reason (rate limit, 5xx).
-    chat_retries: int = 3
-
-    # Your own open-weight models on a Kaggle notebook (kaggle/colony_server.py): its tunnel URL ending in /v1.
-    # Agents use it by picking a model id "kaggle/<name>". The URL changes every time the notebook restarts.
-    kaggle_base_url: str | None = None
-    kaggle_context_window: int = 16_384      # must match OLLAMA_CONTEXT_LENGTH in the notebook
-
     # ── OpenClaw Engine (Gateway on port 18789) ──────────────────────────────
     openclaw_gateway_enabled: bool = True
     openclaw_gateway_url: str = "http://127.0.0.1:18789"
@@ -39,39 +25,23 @@ class Settings(BaseSettings):
     ollama_api_key: str | None = None
     ollama_context_window: int = 32_768
 
-    openai_api_key: str | None = None
-    openai_default_model: str = "gpt-5-mini"
-    openai_timeout_seconds: float = 30.0
-
-    # ── Jev decider (via OpenRouter) ──────────────────────────────────────────
-    # Uses the same openrouter_api_key — no separate key needed.
-    jev_model: str = "typesafe/jev-1.13"
-    jev_decisions_url: str = "https://openrouter.ai/api/alpha/decisions"
-    # Laya (open-weight, runs on this computer) answers the same question instead of Jev when set.
+    # Laya (open-weight, runs on this computer) decides which agent answers when set.
     # `colony` sets it itself when laya-runtime/ is installed (cli.py).
     laya_url: str | None = None
 
-    # ── Agent tools (files + commands, run by the Pi engine) ──────────────────
+    # ── Agent tools (files + commands, run by OpenClaw) ──────────────────
     # Old global "workspace folder" setting; only read once, to give the first workspace its project folder
     # (core/workspaces.py). Each workspace now has its own folder.
     workspace_dir: Path | None = None
-    pi_bin: str | None = None                 # path to Pi; unset = look in pi-runtime/, then PATH
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"   # used by Pi; tests point it at a fake server
-    tools_turn_timeout_seconds: float = 600.0     # one agent turn with tools, including waiting for approvals
+
     approval_timeout_seconds: float = 120.0       # no answer to "allow this?" in time = no
 
     # ── Data ──────────────────────────────────────────────────────────────────
     data_dir: Path = LOCAL_DATA_DIR
 
     # ── Feature flags ─────────────────────────────────────────────────────────
-    self_improve_enabled: bool = True
-    self_improve_interval_turns: int = 5
-    history_max_messages: int = 60     # one workspace = one long conversation; the model's window trims further
-    max_output_tokens: int = 4096
+    history_max_messages: int = 60     # one workspace = one long conversation; OpenClaw compacts each agent's session itself
     max_attachment_mb: int = 20        # per attached file
-    compaction_enabled: bool = True    # summarise the old part of a long conversation (core/compaction.py)
-    compact_at_tokens: int = 24_000    # start summarising when the conversation is this big (estimate)
-    compact_keep_tokens: int = 8_000   # ...and keep about this much of the newest messages word for word
     mock_mode: bool = False           # True → skip real LLM calls (dev/test)
 
     # ── Server ────────────────────────────────────────────────────────────────
@@ -98,7 +68,7 @@ def ensure_env_file() -> None:
     _ENV_FILE.write_text(
         "# Colony Local — configuration\n"
         "# Set your API keys here, then restart the server.\n\n"
-        "OPENROUTER_API_KEY=\n\n"
+        "OLLAMA_API_KEY=\n\n"
         "# Roles (which AI answers what, and how) are edited in the app UI\n"
         "# and stored in ~/.colony/roles.json.\n",
         encoding="utf-8",

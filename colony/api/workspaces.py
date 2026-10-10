@@ -2,13 +2,12 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..config import get_settings
 from ..core.agents import Mode
 from ..core.project_folder import project_folder
 from ..core.workspaces import (
     Workspace, WorkspaceNotFound, create_workspace, delete_workspace, get_workspace, list_workspaces, update_workspace,
 )
-from ..store.history import get_all_messages, get_compaction
+from ..store.history import get_all_messages
 
 router = APIRouter()
 
@@ -81,4 +80,4 @@ def get_workspace_messages(workspace_id: str) -> dict:
         workspace = get_workspace(workspace_id)
     except WorkspaceNotFound as exc:
         raise _not_found(exc) from exc
-    return {"workspace_id": workspace.id, "messages": get_all_messages(workspace.id), "compaction": get_compaction(workspace.id)}
+    return {"workspace_id": workspace.id, "messages": get_all_messages(workspace.id)}

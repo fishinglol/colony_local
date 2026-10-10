@@ -1,4 +1,4 @@
-// Reasoning level per agent: which levels a model supports (from OpenRouter's catalog), and the quick menu on
+// Reasoning level per agent: which levels a model supports (from /api/models), and the quick menu on
 // the sidebar so a level can be changed without opening the editor.
 import { api } from './api.js';
 import { el, toast } from './dom.js';

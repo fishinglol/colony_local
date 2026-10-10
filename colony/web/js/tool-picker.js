@@ -194,7 +194,7 @@ function describe(item) {
   if (item.id === 'bash') return { can: ['Run commands in the project folder'], ask: ['Every command it wants to run'], scopes: [ASK, ALLOW],
     warn: 'A command can do anything your account can do. Keep “Ask each time” unless you fully trust this agent.' };
   if (item.id === 'web') return { can: ['Search the web for every message it answers', 'List the pages it used as Sources under the reply'], ask: [], scopes: [{ v: 'allow', label: 'Every message' }], fixed: true,
-    note: 'About $0.007 per message through OpenRouter’s web search, even on free models, so it needs credits.' };
+    note: 'Uses OpenClaw’s web_search tool (DuckDuckGo).' };
   if (item.id === EVERY_APP) return { can: ['Use any of the 1000+ apps in Composio', 'Connect a new app the first time it needs it (you sign in through a link)'],
     ask: ['Every action in an app: sending, creating, editing, deleting'], scopes: [ASK, ALLOW], apps: true };
   if (item.kind === 'app') return { can: [`Look up your ${app} data once you have signed in`, `Create or change things in ${app} when it helps`, `Sign-in happens the first time it needs ${app}; you get a link to open`],
@@ -228,7 +228,7 @@ function renderDetail() {
   if (info.note) box.appendChild(el('div', 'tp-note', info.note));
   if (info.warn) box.appendChild(el('div', 'tp-note warn', info.warn));
   if (item.kind === 'file' && !ctx.folder) box.appendChild(el('div', 'tp-note warn', 'This workspace has no project folder yet. Choose one (Workspace settings) before the agent can use it.'));
-  if (lockedFor(item)) box.appendChild(el('div', 'tp-note warn', "This agent's model can't use tools (OpenRouter lists no tool support for it). Pick another model first."));
+  if (lockedFor(item)) box.appendChild(el('div', 'tp-note warn', "This agent's model can't use tools (Ollama lists no tool support for it). Pick another model first."));
   if (item.kind === 'app' && !hasComposio()) box.appendChild(composioSetup());
   if (on && ctx.standalone && item.kind === 'app' && item.id !== EVERY_APP) {
     const signIn = el('button', 'btn small', `Sign in to ${item.name}`); signIn.type = 'button'; signIn.style.marginTop = '16px';

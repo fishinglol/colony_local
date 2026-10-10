@@ -1,4 +1,8 @@
 # Project Brief — Colony Local
+> **2026-10-09 direction change (owner):** Colony is becoming the **UI shell of OpenClaw** (`openclaw-main 2/`, v2026.9.8).
+> Every backend system (model calls, tools, plugins/MCP, sessions, memory, approvals) is to be 100% OpenClaw's; Colony keeps
+> the UI and workspaces. The text below that mentions **Pi** (`engine/pi.py`, `pi-runtime/`) describes the *old* backend and
+> is being replaced. Plan and cut list: see `activeContext.md` ("DIRECTION CHANGE"). Not yet implemented in code.
 
 ## What this is
 A small, self-contained **local multi-AI chat app** — its own git repo (`~/Desktop/Colony-Local`, branch `main`).

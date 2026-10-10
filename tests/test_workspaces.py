@@ -5,9 +5,7 @@ from fastapi.testclient import TestClient
 
 from colony.app import app
 from colony.config import get_settings
-from colony.core import chat
-from colony.engine.pi import PiResult
-from colony.llm.providers import ProviderResult
+from colony.engine import openclaw
 
 client = TestClient(app)
 
@@ -19,10 +17,19 @@ def make(name="Shop", **extra):
 
 
 def live(monkeypatch):
+    """Real (non-mock) mode with a fake OpenClaw: returns the turns it was asked to run."""
     monkeypatch.setenv("MOCK_MODE", "false")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     get_settings.cache_clear()
-    monkeypatch.setattr(chat.memory, "maybe_review_in_background", lambda *a: None)
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda s=None: True)
+    monkeypatch.setattr(openclaw, "mark_seen", lambda *a: None)
+    turns = []
+
+    def fake_turn(**kw):
+        turns.append(kw)
+        return openclaw.OpenClawTurnResult(reply="ok", model=kw["role_model"], session_user="ome-test")
+
+    monkeypatch.setattr(openclaw, "run_openclaw_turn", fake_turn)
+    return turns
 
 
 def test_a_fresh_install_has_one_workspace_with_the_default_team():
@@ -42,7 +49,7 @@ def test_each_workspace_has_its_own_team_with_its_own_models():
 
     # the workspace decides which model answers
     assert client.post("/api/messages", json={"message": "hi", "workspace_id": shop["id"], "role_id": "boss"}).json()["model"] == "acme/boss-1"
-    assert client.post("/api/messages", json={"message": "hi", "workspace_id": "local", "role_id": "coding"}).json()["model"] == "z-ai/glm-5.2:free"
+    assert client.post("/api/messages", json={"message": "hi", "workspace_id": "local", "role_id": "coding"}).json()["model"] == "ollama/gpt-oss:120b"
 
 
 def test_a_new_workspace_can_start_from_a_copy_of_another_team_and_then_diverge():
@@ -58,49 +65,34 @@ def test_a_new_workspace_can_start_from_a_copy_of_another_team_and_then_diverge(
 
 
 def test_conversations_are_separate_per_workspace_but_one_conversation_inside_each(monkeypatch):
-    from colony.llm import providers
-
-    seen = []
-    live(monkeypatch)
-    monkeypatch.setattr(providers, "post_json", lambda url, payload, *a, **k: (seen.append(payload["messages"]) or
-                        {"model": payload["model"], "choices": [{"message": {"content": "ok"}}]}))
+    turns = live(monkeypatch)
     shop = make("Shop")
     post = lambda ws, text, role, channel=None: client.post("/api/messages", json={  # noqa: E731
         "message": text, "workspace_id": ws, "role_id": role, "channel": channel or role}).json()
     post("local", "the launch code is 4242", "chitchat", "auto")
     post("local", "what is the launch code?", "coding")                    # another agent, direct chat, same workspace
-    assert "4242" in json.dumps(seen[-1])
+    assert "4242" in json.dumps(turns[-1]["history"])
     post(shop["id"], "what is the launch code?", "coding")                 # another workspace
-    assert "4242" not in json.dumps(seen[-1])
+    assert "4242" not in json.dumps(turns[-1]["history"])
     assert [m["role"] for m in client.get(f"/api/workspaces/{shop['id']}/messages").json()["messages"]] == ["user", "assistant"]
     assert len(client.get("/api/workspaces/local/messages").json()["messages"]) == 4
 
 
 def test_memory_is_kept_per_workspace(monkeypatch):
     live(monkeypatch)
-    monkeypatch.setattr(chat, "generate_openrouter_reply", lambda **kw: ProviderResult(text="Got it!\nMEMORY_SAVE: The cafe closes at 5pm.", model="m"))
     shop = make("Shop")
-    body = client.post("/api/messages", json={"message": "remember the cafe closes at 5pm", "workspace_id": shop["id"], "role_id": "chitchat"}).json()
-    assert body["memory_saved"] is True
+    folder = openclaw.memory_dir(get_settings(), shop["id"])
+    openclaw._seed_memory_dir(folder)
+    (folder / "MEMORY.md").write_text("# Memory\n- The cafe closes at 5pm.\n")
     assert "closes at 5pm" in client.get(f"/api/memory/context?workspace_id={shop['id']}").json()["context"]
     assert "closes at 5pm" not in client.get("/api/memory/context?workspace_id=local").json()["context"]
 
 
-def test_each_workspace_has_its_own_project_folder_for_tools(monkeypatch, tmp_path):
+def test_an_explicit_remember_request_is_kept_even_if_the_agent_wrote_nothing(monkeypatch):
     live(monkeypatch)
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
-    a = make("A", folder=str(tmp_path / "a"))
-    b = make("B", folder=str(tmp_path / "b"))
-    team = [{"id": "dev", "name": "Dev", "model": "acme/dev", "when": "all", "instructions": "", "tools": {"read": "allow"}}]
-    for ws in (a, b):
-        client.put(f"/api/roles?workspace_id={ws['id']}", json={"roles": team})
-    monkeypatch.setattr(chat, "supports_tools", lambda model, settings: True)
-    used = []
-    monkeypatch.setattr(chat, "run_turn", lambda **kw: used.append(kw["workspace"]) or PiResult("done", []))
-    for ws in (a, b):
-        client.post("/api/messages", json={"message": "look", "workspace_id": ws["id"], "role_id": "dev"})
-    assert used == [(tmp_path / "a").resolve(), (tmp_path / "b").resolve()]
+    body = client.post("/api/messages", json={"message": "remember my dog is Kaprao", "role_id": "chitchat"}).json()
+    assert body["memory_saved"] is True
+    assert "Kaprao" in client.get("/api/memory/context").json()["context"]
 
 
 def test_project_folder_is_checked_and_never_the_whole_disk(tmp_path):
@@ -115,16 +107,21 @@ def test_project_folder_is_checked_and_never_the_whole_disk(tmp_path):
     assert cleared["folder"] is None
 
 
-def test_rename_and_delete_a_workspace_with_its_conversation_and_memory(monkeypatch, tmp_path):
+def test_rename_and_delete_a_workspace_with_its_conversation_memory_and_openclaw_agents(monkeypatch):
     live(monkeypatch)
-    monkeypatch.setattr(chat, "generate_openrouter_reply", lambda **kw: ProviderResult(text="ok\nMEMORY_SAVE: A fact.", model="m"))
     shop = make("Shop")
     assert client.patch(f"/api/workspaces/{shop['id']}", json={"name": "  Coffee   shop "}).json()["name"] == "Coffee shop"
     client.post("/api/messages", json={"message": "remember a fact", "workspace_id": shop["id"], "role_id": "chitchat"})
     memory_dir = get_settings().data_dir / "self_improve" / shop["id"]
     assert memory_dir.exists()
+    mine, other = openclaw.agent_id_for(shop["id"], "chitchat"), openclaw.agent_id_for("local", "chitchat")
+    agent_dir = openclaw.config_path().parent / "agents" / mine
+    agent_dir.mkdir(parents=True)
+    openclaw.write_config({"agents": {"entries": {"main": {}, mine: {"name": "Buddy"}, other: {"name": "Buddy"}}}})
+
     assert client.delete(f"/api/workspaces/{shop['id']}").status_code == 200
-    assert not memory_dir.exists()
+    assert not memory_dir.exists() and not agent_dir.exists()
+    assert set(openclaw.read_config()["agents"]["entries"]) == {"main", other}      # only that workspace's agents went
     assert client.get(f"/api/workspaces/{shop['id']}/messages").status_code == 404
     assert client.post("/api/messages", json={"message": "hi", "workspace_id": shop["id"]}).status_code == 404
     assert client.delete("/api/workspaces/local").status_code == 400          # the last one stays
@@ -173,3 +170,12 @@ def test_a_damaged_workspaces_file_is_kept_not_overwritten():
     path.write_text("{ this is not json, but it is long enough to matter")
     assert client.get("/api/workspaces").json()["workspaces"][0]["name"] == "Personal"
     assert list(get_settings().data_dir.glob("workspaces.json.corrupt-*"))
+
+
+def test_an_agent_left_on_a_non_ollama_model_is_told_to_pick_one(monkeypatch):
+    turns = live(monkeypatch)
+    old = [{"id": "boss", "name": "Boss", "model": "anthropic/claude-sonnet-5", "when": "all", "instructions": ""}]
+    client.put("/api/roles?workspace_id=local", json={"roles": old})
+    body = client.post("/api/messages", json={"message": "hi", "role_id": "boss"}).json()
+    assert "not an Ollama model" in body["reply"] and "Boss" in body["reply"] and turns == []
+    assert client.get("/api/workspaces/local/messages").json()["messages"] == []

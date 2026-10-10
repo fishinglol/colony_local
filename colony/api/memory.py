@@ -1,51 +1,36 @@
-"""Endpoints that expose what the assistant has learned about the user (per workspace)."""
+"""Endpoints that show what the team remembers (per workspace): the plain files in its shared memory folder."""
 from fastapi import APIRouter, HTTPException
 
-from .. import memory
+from ..config import get_settings
 from ..core.workspaces import WorkspaceNotFound, get_workspace
+from ..engine.openclaw import memory_dir
 
 router = APIRouter()
 
 
-def _workspace_id(workspace_id: str | None) -> str:
+def _folder(workspace_id: str | None):
     try:
-        return get_workspace(workspace_id).id
+        return memory_dir(get_settings(), get_workspace(workspace_id).id)
     except WorkspaceNotFound as exc:
         raise HTTPException(status_code=404, detail="That workspace doesn't exist.") from exc
 
 
-@router.get("/memory/summary")
-def get_memory_summary(workspace_id: str | None = None) -> dict:
-    """Return the latest self-improvement summary, if any."""
-    return {"summary": memory.pop_unseen_summary(_workspace_id(workspace_id))}
+def _read(path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 @router.get("/memory/context")
 def get_memory_context(workspace_id: str | None = None) -> dict:
-    """Return the current USER.md + MEMORY.md for inspection."""
-    return {"context": memory.learned_context(_workspace_id(workspace_id)) or ""}
+    """USER.md and MEMORY.md as the agents see them."""
+    folder = _folder(workspace_id)
+    return {"context": "\n\n".join(t for t in (_read(folder / "USER.md"), _read(folder / "MEMORY.md")) if t)}
 
 
 @router.get("/memory/daily")
 def get_memory_daily(workspace_id: str | None = None) -> dict:
-    """Return recent episodic daily notes for inspection."""
-    ws = _workspace_id(workspace_id)
-    notes = memory.list_daily_notes(ws, limit=14)
-    return {"notes": [{"date": d, "content": c} for d, c in notes]}
-
-
-@router.post("/memory/dream")
-def trigger_memory_dream(workspace_id: str | None = None) -> dict:
-    """Manually trigger background dreaming consolidation."""
-    ws = _workspace_id(workspace_id)
-    result = memory.run_dreaming_consolidation(ws)
-    return result
-
-
-@router.get("/memory/dreams")
-def get_memory_dreams(workspace_id: str | None = None) -> dict:
-    """Return the DREAMS.md consolidation audit log."""
-    ws = _workspace_id(workspace_id)
-    path = memory.dreams_md_path(ws)
-    content = path.read_text(encoding="utf-8") if path.exists() else ""
-    return {"dreams": content}
+    """The newest daily notes (memory/YYYY-MM-DD.md)."""
+    notes = sorted((_folder(workspace_id) / "memory").glob("*.md"), reverse=True)[:14]
+    return {"notes": [{"date": p.stem, "content": _read(p)} for p in notes]}

@@ -1,5 +1,5 @@
 // The context gauge: how full each agent's context window is for the open workspace.
-// The numbers come from the server (/api/context) and are estimates.
+// The numbers come from the server (/api/context): the prompt size OpenClaw reported for each agent's last turn.
 import { api } from './api.js';
 import { avatar } from './avatar.js';
 import { $, el, shortModel } from './dom.js';
@@ -33,7 +33,7 @@ export function renderContext() {
   btn.title = loadError ? 'Could not load context usage' : "How full each agent's context window is";
   if (loadError) { btn.textContent = 'Context ⚠'; }
   else if (!shown) { btn.textContent = 'Context'; }
-  else if (shown.percent == null) { btn.textContent = `Context ~${tokens(shown.used_tokens)}`; }
+  else if (shown.percent == null) { btn.textContent = 'Context'; }
   else { btn.textContent = `Context ${mine ? '' : shown.name + ' '}${percentText(shown.percent)}`; }
 
   const pop = $('ctxPop'); pop.innerHTML = '';
@@ -46,20 +46,17 @@ export function renderContext() {
     const row = el('div', 'ctx-row');
     const top = el('div', 'ctx-top');
     top.append(avatar({ id: a.role_id, name: a.name }), el('span', 'ctx-name', a.name), el('span', 'ctx-model', shortModel(a.model)),
-      el('span', 'ctx-pct ' + level(a.percent), a.percent == null ? 'unknown' : percentText(a.percent)));
+      el('span', 'ctx-pct ' + level(a.percent), a.percent == null ? 'no turn yet' : percentText(a.percent)));
     row.appendChild(top);
     if (a.percent != null) {
       const track = el('div', 'ctx-track'), fill = el('div', 'ctx-fill ' + level(a.percent));
       fill.style.width = Math.max(a.percent, 1) + '%'; track.appendChild(fill); row.appendChild(track);
     }
-    const seen = a.messages_total === 0 ? 'no messages yet'
-      : a.messages_sent === a.messages_total ? `sees all ${a.messages_total} messages`
-      : `sees the last ${a.messages_sent} of ${a.messages_total} messages`;
-    const size = a.window ? `~${tokens(a.used_tokens)} of ${tokens(a.window)} tokens` : `~${tokens(a.used_tokens)} tokens · window size unknown`;
-    row.appendChild(el('div', 'ctx-detail', `${size} · ${seen}`));
+    const size = a.used_tokens == null ? `no turn yet · window ${tokens(a.window)} tokens` : `${tokens(a.used_tokens)} of ${tokens(a.window)} tokens`;
+    row.appendChild(el('div', 'ctx-detail', size));
     pop.appendChild(row);
   });
-  pop.appendChild(el('div', 'ctx-note', 'Estimates. When the conversation outgrows an agent\'s window, its oldest messages are left out for that agent.'));
+  pop.appendChild(el('div', 'ctx-note', 'Real prompt sizes from OpenClaw. When a session gets full, OpenClaw summarises its older part by itself.'));
 }
 
 export function initContext() {

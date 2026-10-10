@@ -1,4 +1,9 @@
 # System Patterns — Colony Local
+> **Pi (pattern 7, `engine/pi.py`, `pi-runtime/`) and `core/agent_loop.py` were deleted 2026-10-09.**
+> **2026-10-09 target architecture (partly built):** `Colony UI (web/) → thin api/ → OpenClaw (openclaw-main 2) via Gateway :18789`.
+> Colony launches OpenClaw from source itself. Patterns 4e (compaction), 4f (MCP/Composio), 4g (Kaggle provider), 6 (memory),
+> 7 (Pi engine), 8 (project folder) are **legacy / to be handed to OpenClaw**; pattern 7 (Pi) is to be deleted. Keep 1, 3b,
+> 5 (trimmed), 9, 10 and the OpenClaw section at the end. Cut list: `activeContext.md`.
 
 All paths are relative to the repo root (`~/Desktop/Colony-Local`; this used to be `local/` inside ColonyBridge — old
 notes that say `local/x` mean `x`). Line counts as of 2026-09-29.
@@ -16,13 +21,14 @@ colony/
     workspaces.py         /workspaces (list, create, PATCH, DELETE) /workspaces/{id}/messages
     agents.py             /roles?workspace_id= (GET, PUT) /models (Kaggle server's models first, then catalog + capabilities) /models/test
     tools.py              /approvals (GET) /approvals/{id} (POST) /models/tools
-    settings.py           /settings (GET, POST: OpenRouter key, Kaggle server URL)
+    plugins.py            /openclaw/plugins (GET, POST, /batch: manage categorized OpenClaw plugins with hot reload)
+    settings.py           /settings (GET, POST: OpenRouter key, Kaggle server URL, OpenClaw gateway settings)
     memory.py             /memory/summary /memory/context
     attachments.py        POST/GET /workspaces/{id}/attachments (JSON + base64 upload, no python-multipart)
     mcp.py                GET|PUT /mcp (connectors, secrets masked), POST /mcp/composio
     links.py              POST /open-url (open an http(s) link in the real browser)
   core/                   business logic
-    chat.py (277)         handle_message(): decide -> plan history -> (Pi | plain chat) -> persist
+    chat.py (277)         handle_message(): decide -> plan history -> (OpenClaw | Pi | plain chat) -> persist
     decider.py (86)       who answers in # mix: Laya (LAYA_URL) or Jev (OpenRouter) + visible fallback
     workspaces.py         Workspace store (~/.colony/workspaces.json): team, folder, create/copy/rename/delete, first-run migration
     agents.py             Role, ToolAccess, DEFAULT_ROLES, validate_roles (no storage: roles live in a workspace)
@@ -35,6 +41,7 @@ colony/
     mcp.py                connectors: MCP server list (~/.colony/mcp-servers.json), masking, Composio preset
     project_folder.py     explicit folder agents with tools may use (per workspace; otherwise chat-only)
   engine/
+    openclaw.py           run_openclaw_turn(): turns through OpenClaw Gateway (/v1/chat/completions) with live streaming & capabilities
     pi.py (249)           run_turn(): one agent turn through Pi RPC (OpenRouter or the Kaggle URL in models.json)
     colony-gate.ts        Pi extension: per-tool allow/ask/off + workspace fence + the `mcp` tool rules (looking is free, calls ask, install/sign-in refused)
   llm/
@@ -340,3 +347,36 @@ Hugging Face cache (`~/.cache/huggingface`, ~1.3 GB).
   running after Colony was stopped → stdin-pipe lifeline + `killpg`, same idea as the desktop shell.
 - **Kaggle:** see activeContext "Kaggle lessons" (use Save & Run All with GPU; never Ollama's install.sh; import makes a
   CPU run you must cancel; the editor is a cross-origin iframe).
+- **OpenClaw tool-search compact cataloging:** OpenClaw bundles 59 tools behind a 2-stage `toolSearch` meta-tool by default.
+  Smaller open-weights models (like Ollama models) fail to invoke this 2-stage discovery and hallucinate answers instead.
+  Disabling it with `"toolSearch": false` in `~/.openclaw/openclaw.json` exposes tools (like `web_search`) directly as
+  first-class callable tools.
+- **OpenClaw `x-openclaw-model` header:** OpenClaw Gateway returns HTTP 404 (unknown model) if `x-openclaw-model` contains a
+  provider not configured in OpenClaw (such as `kaggle/...`). Colony explicitly filters this so OpenClaw gracefully falls back
+  to its default configured local model (`ollama/nemotron-3-super`).
+- **OpenClaw Gateway SQLite reclamation:** On abrupt restarts, OpenClaw Gateway performs background integrity inspection on
+  `openclaw-agent.sqlite` before admitting writes (~5-10 s). Requests sent during this brief window receive HTTP 500
+  (`AgentDatabaseAdmissionError`); they succeed once background preparation completes.
+
+## OpenClaw Gateway & Plugin Architecture (2026-10-09)
+- **OpenClaw Gateway as Core Execution Engine:** Colony connects to OpenClaw Gateway running locally on port 18789
+  (`http://127.0.0.1:18789/v1/chat/completions`). When `OPENCLAW_GATEWAY_ENABLED=true` and Gateway is reachable, Colony routes
+  agent execution through `colony/engine/openclaw.py` (`run_openclaw_turn`), passing role identity, capability boundaries,
+  workspace folder, and conversation history.
+- **Categorized OpenClaw Plugin Manager:** `colony/api/plugins.py` exposes 18 real OpenClaw plugins across 5 clear categories:
+  1. *Web & Search:* DuckDuckGo (free, keyless), Web Readability, Brave, Tavily, Google.
+  2. *Automation & Scheduling:* Cron Reminders, Background Automations, Heartbeat.
+  3. *Code & Sandbox:* Document Extract, Bash/Shell Execution, Browser Automation.
+  4. *Memory & Brain:* Episodic Memory & Dreaming, Active Context, Memory Wiki.
+  5. *External Integrations:* GitHub, Notion, Discord, Telegram.
+  Toggling plugins directly mutates `~/.openclaw/openclaw.json` (`plugins.entries`), triggering real-time Gateway hot reload
+  without service restarts.
+- **Agent Capability & Tool Matrix:** Quick capability cards in the Agent Editor modal allow discrete control over:
+  - Web Search (`role.web_search`)
+  - Read Files (`role.tools.read`)
+  - Write & Edit Files (`role.tools.write`)
+  - Shell / Bash Execution (`role.tools.bash`)
+  Presets map cleanly: Thinker (Web+Read), Buddy (Web only), Writer (Web+Read+Write), Coder (All four).
+- **Strict Real-Time Grounding Policy:** System prompts injected into OpenClaw explicitly mandate that models with fixed training
+  cutoffs must not guess live prices (Bitcoin, stocks), current events, or 2026 facts; they must call `web_search` to ground
+  responses in real data.

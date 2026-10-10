@@ -1,4 +1,7 @@
 # Product Context — Colony Local
+> **2026-10-09 product decision (owner, do not relitigate):** the product is "Colony's UI on top of a 100% OpenClaw backend".
+> Colony no longer builds its own agent engine, tool runner, connector layer or memory; it adds the multi-agent, workspace
+> and room experience on top of OpenClaw. Open: whether Laya's `# mix` routing stays (OpenClaw may not duplicate it).
 
 ## Why this exists
 The owner uses several AI models (a reasoning one, a chatty one, a writing one,
@@ -17,12 +20,12 @@ one idea: *one conversation, many models, nobody needs to be told twice.*
   *displays* inside a workspace. Switching rooms changes only what is shown; **every agent still
   receives the whole conversation**. Messages carry a `channel` tag.
 - **Agent editor:** name, **model picker** (a "Select model" window styled after opencode's: search box,
-  a Suggested group then every OpenRouter model grouped by maker, hover/arrow keys show a card of what the
+  a Suggested group then every OpenRouter/Ollama model grouped by maker, hover/arrow keys show a card of what the
   model can do — reads text/images/video/files/audio, can use tools, reasoning, context limit; typing an id
   like `provider/name` offers it as a custom model; "Test this model" pings it), *When should this agent
-  answer?*, *How should it answer?*, and **Tools** (a list of what is connected, each row with its logo and scope, plus ＋ Connect a tool which opens the
-  same window as the sidebar Connectors button; locked to web search only when the model can't use tools). Selects are custom-styled (no native
-  glossy look) with a small badge for the model's maker.
+  answer?*, *How should it answer?*, and **Agent Capability Cards** (4 intuitive cards: 🌐 Web Search, 📖 Read Files,
+  ✏️ Write Files, ⚡ Shell Execution) with one-click role presets (Thinker, Buddy, Writer, Coder). Also supports the
+  legacy Connect-a-tool picker for external connectors.
 - **Reasoning level per agent** (only for models that can reason): a violet **pill on the agent's sidebar row**
   (`Reasoning Medium ▾`) opens a small menu to change it without opening the editor; the editor has the same
   choice as level buttons under the model. Choices come from OpenRouter's per-model metadata: Default (shows the
@@ -30,18 +33,20 @@ one idea: *one conversation, many models, nobody needs to be told twice.*
 - **Chat box:** `+` menu (Add files or photos ⌘U / Add folder), drag files anywhere, paste images; chips above the text. Bottom row: **folder button** (native folder window in the
   desktop app; without a folder agents are chat-only), **mode pill** (Auto · Manual · Accept edits · Plan · Bypass), send. Jev only picks agents whose model can read the attachment; a Colony notice
   (English) says what to change when nobody can.
-- **Tools per agent = the "Connect a tool" window** (sidebar **Connectors** button, or the Tools list in the agent editor): search, category pills, ~105 tools (project files, edit files,
+- **Tools per agent:** Managed via OpenClaw Gateway capabilities or the legacy "Connect a tool" window (sidebar **Connectors** button): search, category pills, ~105 tools (project files, edit files,
   commands, web search, **97 apps through Composio** with real logos, your own MCP servers, "Add a connector"), right panel *This agent can / Needs approval before / Access scope*
   (Ask each time | Allow freely). Users bring their own Composio consumer key (ck_…); nothing is shared.
-- **Web search** per agent (OpenRouter, ~$0.007 per message; Sources listed under the reply). **Long conversations** are summarised in the background (a "summarised for the AIs · View summary" note).
+- **Web search** per agent: Handled through OpenClaw Gateway (`web_search` via DuckDuckGo, keyless, grounded) or OpenRouter plugin. **Long conversations** are summarised in the background (a "summarised for the AIs · View summary" note).
 - **Context chip** (top right): estimated % of each agent's context window used
   by this chat.
 - **Approval cards:** when a tools-enabled agent wants to write a file or run a
   command, an Allow/Deny card appears under its typing indicator.
 - **Memory viewer:** what every agent knows about the user. Saying "remember …"
   saves immediately; otherwise a background review runs every 5 turns.
-- **Settings:** OpenRouter key and **Kaggle server URL** (paste the address the Kaggle notebook prints; the model
-  picker then shows a "Kaggle (your GPU)" group with the notebook's models).
+- **Settings:** Tabbed Settings modal with 3 sections:
+  1. `🔌 OpenClaw Plugins`: Categorized manager for 18 OpenClaw plugins across 5 categories, with recommendation badges, descriptions, hot-reload toggles, and one-click recommended preset.
+  2. `🤖 AI Providers & Keys`: API keys (OpenRouter), Kaggle GPU Server URL.
+  3. `🖥️ Gateway Status`: Real-time status indicator for OpenClaw Gateway (port 18789).
 - Replies show speaker name, model tag, decider confidence (`Laya 92%` or `Jev 67%`; or a "Jev/Laya unavailable —
   default agent" warning), a "Saved to memory" tag, and a `🛠 wrote x · ran y`
   line when tools were used. "Ask another agent ▾" re-asks the same question.

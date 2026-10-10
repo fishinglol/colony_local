@@ -1,0 +1,13 @@
+{
+  "id": "colony-gate",
+  "name": "Colony approvals",
+  "description": "Asks Colony before an agent reads, writes, runs commands or uses a connector.",
+  "categories": ["other"],
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

@@ -3,9 +3,8 @@
 Files are saved under ~/.colony/attachments/<workspace id>/ (never inside the conversation file). A message only
 keeps small references to them. When a message is sent to a model, each attachment becomes:
   - text / code files -> their content, pasted into the message (works for every model);
-  - image / PDF / video / audio -> real media parts, but only if the model's catalog entry says it accepts that
-    kind of input; otherwise a short note ("this model can't read images") so the shared conversation still makes
-    sense to it;
+  - images -> image parts and PDFs -> file parts (OpenClaw reads their text itself); audio and video -> a short note
+    that they can't be read, so the shared conversation still makes sense;
 and only the last few attachment messages are sent in full, so an old photo isn't re-uploaded on every turn.
 """
 import base64
@@ -23,8 +22,6 @@ _MIME = {
 }
 _KIND = {"image": (".png", ".jpg", ".jpeg", ".gif", ".webp"), "pdf": (".pdf",),
          "video": (".mp4", ".webm", ".mov", ".mpeg", ".mpg"), "audio": (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac")}
-# The `input_modalities` value OpenRouter lists for each kind of file.
-NEEDS = {"image": "image", "pdf": "file", "video": "video", "audio": "audio"}
 LABEL = {"image": "images", "pdf": "PDFs", "video": "video", "audio": "audio"}
 
 KEEP_RECENT = 3            # only the newest messages with files are sent to the model in full
@@ -104,16 +101,9 @@ def resolve(settings: Settings, workspace_id: str, ids: list[str]) -> list[dict]
     return refs
 
 
-def unreadable(kinds: set[str], inputs: list[str] | None, with_tools: bool) -> list[str]:
-    """The kinds of file (from `kinds`) that a model can't read. `inputs` is what the catalog says it accepts
-    (None = unknown, so trust it). An agent that uses tools runs through Pi, which passes on images and text only."""
-    blocked = []
-    for kind in sorted(kinds):
-        if kind == "text":
-            continue
-        if (with_tools and kind != "image") or (inputs is not None and NEEDS[kind] not in inputs):
-            blocked.append(kind)
-    return blocked
+def unreadable(kinds: set[str]) -> list[str]:
+    """The kinds of file (from `kinds`) no agent can read: every agent runs through OpenClaw, which takes images, PDFs and text."""
+    return sorted(k for k in kinds if k not in ("text", "image", "pdf"))
 
 
 def labels(kinds: list[str]) -> str:
@@ -141,9 +131,8 @@ def part(settings: Settings, workspace_id: str, ref: dict) -> dict | None:
     return {"type": "input_audio", "input_audio": {"data": base64.b64encode(raw).decode(), "format": Path(ref["name"]).suffix.lower().lstrip(".")}}
 
 
-def render(settings: Settings, workspace_id: str, refs: list[dict], *, inputs: list[str] | None,
-           recent: bool, with_tools: bool = False) -> tuple[str, list[dict]]:
-    """(text to add after the message, references whose media should be attached) for one model."""
+def render(settings: Settings, workspace_id: str, refs: list[dict], *, recent: bool) -> tuple[str, list[dict]]:
+    """(text to add after the message, references whose media should be attached)."""
     lines, media = [], []
     for ref in refs:
         name, kind = ref["name"], ref["kind"]
@@ -158,47 +147,11 @@ def render(settings: Settings, workspace_id: str, refs: list[dict], *, inputs: l
                 continue
             cut = "\n[…file cut here, it is longer than Colony sends…]" if len(text) > MAX_TEXT_CHARS else ""
             lines.append(f"[Attached file: {name}]\n```\n{text[:MAX_TEXT_CHARS]}{cut}\n```")
-        elif unreadable({kind}, inputs, with_tools):
-            why = "agents that use tools can only read images and text files" if with_tools and kind != "image" \
-                else f"this model can't read {LABEL[kind]}"
-            lines.append(f"[Attached {kind}: {name} — {why}]")
+        elif unreadable({kind}):
+            lines.append(f"[Attached {kind}: {name} — agents that run through OpenClaw can only read images, PDFs and text files]")
         elif recent:
             lines.append(f"[Attached {kind}: {name}]")
             media.append(ref)
         else:
             lines.append(f"[Attached {kind}: {name} — sent earlier and not repeated]")
     return ("\n\n" + "\n\n".join(lines)) if lines else "", media
-
-
-def with_parts(settings: Settings, workspace_id: str, history: list[dict]) -> list[dict]:
-    """History ready to send: a message that has media becomes text + the media parts."""
-    ready = []
-    for m in history:
-        media = m.get("media")
-        if not media:
-            ready.append(m)
-            continue
-        parts = [p for p in (part(settings, workspace_id, ref) for ref in media) if p]
-        ready.append({"role": m["role"], "content": [{"type": "text", "text": m["content"]}, *parts]} if parts
-                     else {"role": m["role"], "content": m["content"]})
-    return ready
-
-
-def user_content(settings: Settings, workspace_id: str, text: str, media: list[dict]) -> str | list[dict]:
-    """The user's message as a model wants it: a plain string, or text plus media parts."""
-    parts = [p for p in (part(settings, workspace_id, ref) for ref in media) if p]
-    return [{"type": "text", "text": text}, *parts] if parts else text
-
-
-def pi_images(settings: Settings, workspace_id: str, media: list[dict]) -> list[dict]:
-    """The images in Pi's own format (Pi can be handed images; tool agents get no other kind of media)."""
-    images = []
-    for ref in media:
-        if ref["kind"] != "image":
-            continue
-        try:
-            raw = file_path(settings, workspace_id, ref["id"]).read_bytes()
-        except OSError:
-            continue
-        images.append({"type": "image", "data": base64.b64encode(raw).decode(), "mimeType": ref["mime"]})
-    return images

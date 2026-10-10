@@ -15,7 +15,7 @@ class MessageRequest(BaseModel):
     # Generous on purpose: pasting a long work update is the point of a shared context.
     message: str = Field(default="", max_length=100_000)
     attachments: list[str] = Field(default_factory=list, max_length=10)   # ids from POST /workspaces/{id}/attachments
-    role_id: str | None = None   # message one role directly — skips Jev
+    role_id: str | None = None   # message one role directly — skips the decider
     # Which room the user typed in: "auto" (the group chat) or an agent id (that agent's direct chat).
     # Only decides where the message is DISPLAYED; every agent still sees the whole conversation.
     channel: str | None = Field(default=None, max_length=40)
@@ -35,7 +35,7 @@ class MessageResponse(BaseModel):
     role_id: str | None = None
     role_name: str | None = None
     channel: str = "auto"
-    decided_by: str | None = None      # "jev" | "laya" | "direct" | "only_role" | "fallback"
+    decided_by: str | None = None      # "nemotron" | "laya" | "direct" | "only_role" | "fallback"
     confidence: float | None = None
     memory_saved: bool = False
     actions: list[str] = Field(default_factory=list)

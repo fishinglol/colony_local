@@ -28,7 +28,7 @@
       <button class="row" id="autoRow">
         <span class="hash">#</span>
         <span class="name">mix</span>
-        <span class="sub">Jev</span>
+        <span class="sub">Laya</span>
       </button>
 
       <div class="group-label"><span>Direct Agents</span><button id="addAgentBtn" title="Add agent">＋</button></div>
@@ -99,7 +99,7 @@
 <div class="overlay" id="agentModal">
   <div class="card">
     <h3 id="agentModalTitle">Edit agent</h3>
-    <p class="hint">You decide who answers what. Jev reads every agent's "When" rule and picks one for each message in #mix.</p>
+    <p class="hint">You decide who answers what. Laya reads every agent's "When" rule and picks one for each message in #mix.</p>
     <div class="presets" id="presets"></div>
     <div class="field"><label>Name</label><input id="fName" maxlength="40" placeholder="e.g. Research"></div>
     <div class="field">
@@ -120,16 +120,83 @@
     <div class="field">
       <label>When should this agent answer?</label>
       <textarea id="fWhen" maxlength="500" placeholder="e.g. Questions about code, bugs, or technical design."></textarea>
-      <small>Jev uses this to decide. Be specific so agents don't overlap.</small>
+      <small>The decider uses this to decide. Be specific so agents don't overlap.</small>
     </div>
     <div class="field">
       <label>How should it answer?</label>
       <textarea id="fInstructions" maxlength="2000" placeholder="e.g. Answer in Thai. Show code first, then a short explanation."></textarea>
     </div>
-    <div class="field">
-      <label>Tools</label>
-      <div id="toolRows"></div>
-      <button class="btn" id="connectToolBtn" type="button">＋ Connect a tool</button>
+    <div class="field agent-tools-section">
+      <div class="agent-tools-header">
+        <label>AI Capabilities & Permissions (เครื่องมือและความสามารถ)</label>
+        <button type="button" class="chip-preset-btn" id="applyRolePresetBtn">
+          ✨ ปรับเครื่องมือแนะนำสำหรับ Agent นี้
+        </button>
+      </div>
+      <small class="agent-tools-hint">กำหนดว่า AI ตัวนี้ควรเข้าถึงเครื่องมืออะไรบ้าง เพื่อความปลอดภัยและความเชี่ยวชาญเฉพาะด้าน</small>
+
+      <!-- Grid of Quick Capability Switches -->
+      <div class="agent-capability-grid">
+        <!-- 1. Web Search -->
+        <label class="cap-card" id="capCardWeb">
+          <input type="checkbox" id="capWebSearch" class="cap-checkbox">
+          <div class="cap-info">
+            <div class="cap-title">
+              <span class="cap-icon">🌐</span>
+              <span class="cap-name">Web Search (DuckDuckGo)</span>
+              <span class="cap-badge rec">แนะนำ: ทุกตัว</span>
+            </div>
+            <div class="cap-desc">ค้นหาเว็บสด ข้อมูลล่าสุด ราคา เช็กข้อมูลเรียลไทม์</div>
+          </div>
+        </label>
+
+        <!-- 2. Read Files -->
+        <label class="cap-card" id="capCardRead">
+          <input type="checkbox" id="capReadFile" class="cap-checkbox">
+          <div class="cap-info">
+            <div class="cap-title">
+              <span class="cap-icon">📖</span>
+              <span class="cap-name">Read Project Files</span>
+              <span class="cap-badge rec">Coder / Thinker</span>
+            </div>
+            <div class="cap-desc">อ่านและค้นหาไฟล์โค้ด เอกสาร ในโฟลเดอร์โปรเจกต์</div>
+          </div>
+        </label>
+
+        <!-- 3. Write & Edit Files -->
+        <label class="cap-card" id="capCardWrite">
+          <input type="checkbox" id="capWriteFile" class="cap-checkbox">
+          <div class="cap-info">
+            <div class="cap-title">
+              <span class="cap-icon">✏️</span>
+              <span class="cap-name">Create & Edit Files</span>
+              <span class="cap-badge coder">Coder / Writer</span>
+            </div>
+            <div class="cap-desc">สร้างไฟล์ใหม่ แก้ไขโค้ด บันทึกบทความในโปรเจกต์</div>
+          </div>
+        </label>
+
+        <!-- 4. Shell / Bash Execution -->
+        <label class="cap-card" id="capCardBash">
+          <input type="checkbox" id="capBashExec" class="cap-checkbox">
+          <div class="cap-info">
+            <div class="cap-title">
+              <span class="cap-icon">💻</span>
+              <span class="cap-name">Shell / Bash Execution</span>
+              <span class="cap-badge danger">Coder เท่านั้น</span>
+            </div>
+            <div class="cap-desc">รันคำสั่ง Terminal, รันเทสต์, รันโปรแกรมใน sandbox</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- Advanced Connectors / MCP -->
+      <div class="advanced-tools-row">
+        <button class="btn subtle-btn" id="connectToolBtn" type="button">
+          🧩 เพิ่มเติม: เชื่อมต่อ MCP Connectors & Apps (Composio)
+        </button>
+      </div>
+      <div id="toolRows" style="margin-top:6px"></div>
       <small id="toolsNote"></small>
     </div>
     <div class="form-error" id="agentError"></div>
@@ -166,44 +233,101 @@
 
 <!-- Settings -->
 <div class="overlay" id="settingsModal">
-  <div class="card">
-    <h3>Settings</h3>
-    <p class="hint">Your key is saved only on this machine, in <span id="dataDir" style="font-family:var(--font-mono)"></span>/.env</p>
-    <div class="field">
-      <label>OpenRouter API key</label>
-      <input id="fKey" type="password" autocomplete="off" placeholder="sk-or-v1-…">
-      <small id="keyStatus"></small>
+  <div class="card settings-card">
+    <div class="settings-header">
+      <div>
+        <h3>Settings & Plugins</h3>
+        <p class="hint">จัดการการเชื่อมต่อ AI Providers และปลั๊กอินเครื่องมือของ OpenClaw ในเครื่องคุณ</p>
+      </div>
+      <span id="dataDir" style="display:none"></span>
     </div>
-    <div class="field">
-      <label>Kaggle server URL (optional)</label>
-      <input id="fKaggle" type="url" autocomplete="off" placeholder="https://….trycloudflare.com">
-      <small>Your own free models on a Kaggle GPU. Run <span style="font-family:var(--font-mono)">kaggle/colony_server.py</span> in a Kaggle notebook and paste the address it prints. It changes each time the notebook restarts. Then pick a “Kaggle (your GPU)” model for an agent.</small>
+
+    <!-- Tabs Navigation -->
+    <div class="settings-tabs">
+      <button class="settings-tab active" id="tabBtnPlugins" data-tab="tabPlugins" type="button">
+        <span>🔌 OpenClaw Plugins</span>
+      </button>
+      <button class="settings-tab" id="tabBtnProviders" data-tab="tabProviders" type="button">
+        <span>🤖 AI Providers & Keys</span>
+      </button>
+      <button class="settings-tab" id="tabBtnGateway" data-tab="tabGateway" type="button">
+        <span>🖥️ Gateway Status</span>
+      </button>
     </div>
-    <div class="field">
-      <label>Ollama API URL (optional)</label>
-      <input id="fOllamaUrl" type="url" autocomplete="off" placeholder="http://localhost:11434">
-      <small>Local Ollama instance or cloud endpoint for Nemotron, Gemma, and GPT-OSS models.</small>
+
+    <!-- Tab 1: OpenClaw Plugins Manager -->
+    <div class="settings-tab-pane active" id="tabPlugins">
+      <div class="plugins-bar">
+        <div>
+          <span class="plugins-count-badge" id="pluginsCountBadge">กำลังโหลดปลั๊กอิน…</span>
+          <div style="font-size:11px;color:var(--text-50);margin-top:2px">
+            เปิด/ปิดเครื่องมือแต่ละตัวตามความต้องการ (OpenClaw จะรีโหลดทันที)
+          </div>
+        </div>
+        <button class="btn-preset-all" id="btnEnableAllRec" type="button">
+          ✨ เปิดปลั๊กอินแนะนำทั้งหมด
+        </button>
+      </div>
+
+      <!-- Categories Container -->
+      <div id="pluginsCatalogContainer">
+        <div style="text-align:center;padding:20px;color:var(--text-50)">กำลังโหลดข้อมูลปลั๊กอินจาก OpenClaw Gateway…</div>
+      </div>
     </div>
-    <div class="field">
-      <label>Ollama API Key (optional)</label>
-      <input id="fOllamaKey" type="password" autocomplete="off" placeholder="Bearer / API key if required">
-      <small id="ollamaKeyStatus"></small>
+
+    <!-- Tab 2: AI Providers & Keys -->
+    <div class="settings-tab-pane" id="tabProviders">
+      <div class="field">
+        <label>Ollama API URL (Cloud หรือ Local)</label>
+        <input id="fOllamaUrl" type="url" autocomplete="off" placeholder="https://ollama.com หรือ http://localhost:11434">
+        <small>รองรับทั้ง Ollama Cloud (Nemotron, Gemma, GPT-OSS) และ Ollama ในเครื่อง</small>
+      </div>
+      <div class="field">
+        <label>Ollama API Key (สำหรับ Cloud)</label>
+        <input id="fOllamaKey" type="password" autocomplete="off" placeholder="Bearer / API key">
+        <small id="ollamaKeyStatus"></small>
+      </div>
     </div>
-    <div class="field">
-      <label>OpenClaw Gateway URL (optional)</label>
-      <input id="fOpenclawUrl" type="url" autocomplete="off" placeholder="http://127.0.0.1:18789">
-      <small>Local OpenClaw Gateway daemon controlling subagents, tools sandbox, and memory tiers.</small>
+
+    <!-- Tab 3: Gateway Status -->
+    <div class="settings-tab-pane" id="tabGateway">
+      <div class="gw-status-box">
+        <div class="gw-status-item">
+          <span class="gw-status-label">OpenClaw Gateway</span>
+          <span class="gw-status-val" id="gwStatusOnline" style="color:#10b981">🟢 Online (59 Tools Active)</span>
+        </div>
+        <div class="gw-status-item">
+          <span class="gw-status-label">Laya Decider Router</span>
+          <span class="gw-status-val" style="color:#10b981">🟢 Online (Port 8790)</span>
+        </div>
+        <div class="gw-status-item">
+          <span class="gw-status-label">Colony Local Daemon</span>
+          <span class="gw-status-val" style="color:#10b981">🟢 Online (Port 8765)</span>
+        </div>
+        <div class="gw-status-item">
+          <span class="gw-status-label">Tool Execution Sandbox</span>
+          <span class="gw-status-val" style="color:#a78bfa">Full Sandbox Profile</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>OpenClaw Gateway URL</label>
+        <input id="fOpenclawUrl" type="url" autocomplete="off" placeholder="http://127.0.0.1:18789">
+        <small>ที่อยู่ของ OpenClaw Gateway Daemon (ค่าเริ่มต้น http://127.0.0.1:18789)</small>
+      </div>
+      <div class="field">
+        <label>OpenClaw Gateway Token (ทางเลือก)</label>
+        <input id="fOpenclawToken" type="password" autocomplete="off" placeholder="Bearer token ถ้ามีการตั้งค่า auth">
+        <small id="openclawTokenStatus"></small>
+      </div>
     </div>
-    <div class="field">
-      <label>OpenClaw Gateway Token (optional)</label>
-      <input id="fOpenclawToken" type="password" autocomplete="off" placeholder="Bearer token if authentication is enabled">
-      <small id="openclawTokenStatus"></small>
-    </div>
+
     <div class="form-error" id="settingsError"></div>
-    <div class="actions"><div class="right">
-      <button class="btn" data-close="settingsModal">Cancel</button>
-      <button class="btn primary" id="saveSettingsBtn">Save</button>
-    </div></div>
+    <div class="actions">
+      <div class="right">
+        <button class="btn" data-close="settingsModal" type="button">Cancel</button>
+        <button class="btn primary" id="saveSettingsBtn" type="button">Save Settings</button>
+      </div>
+    </div>
   </div>
 </div>
 

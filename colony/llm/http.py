@@ -1,7 +1,7 @@
-"""The one place that talks HTTP to AI APIs (OpenRouter, OpenAI, Jev).
+"""The one place that talks HTTP to AI APIs (Ollama, Laya).
 
 Moved out of providers.py so every caller shares the same SSL setup, retry rules
-and error messages. Callers that can't afford to wait (the Jev decider) pass
+and error messages. Callers that can't afford to wait (the decider) pass
 retries=0.
 """
 import json

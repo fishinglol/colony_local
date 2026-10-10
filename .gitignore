@@ -5,3 +5,4 @@ __pycache__/
 node_modules/
 desktop/src-tauri/target/
 .DS_Store
+openclaw-main 2/

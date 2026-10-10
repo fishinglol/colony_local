@@ -54,14 +54,8 @@ def create_app() -> FastAPI:
 
     async def startup() -> None:
         s = get_settings()
-        if not s.openrouter_api_key and not s.openai_api_key:
-            logger.warning(
-                "⚠️  No API key found. Set OPENROUTER_API_KEY in %s",
-                s.data_dir / ".env",
-            )
-        else:
-            logger.info("✅  Colony Local ready — provider: %s",
-                        "OpenRouter" if s.openrouter_api_key else "OpenAI")
+        if not s.ollama_api_key:
+            logger.info("No OLLAMA_API_KEY in %s: fine for a local Ollama, Ollama Cloud models need one.", s.data_dir / ".env")
         logger.info("📁  Data directory: %s", s.data_dir)
         from .core.workspaces import list_workspaces
         for workspace in list_workspaces():

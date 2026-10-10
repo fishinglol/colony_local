@@ -2,9 +2,9 @@
 
 A role is one "AI teammate" the user sets up in the UI:
   - name:         shown in the sidebar and on each reply
-  - model:        OpenRouter model id that answers as this role
+  - model:        Ollama model id (ollama/<name>) that answers as this role
   - when:         plain-language rule for WHEN this role should answer
-                  (sent to Jev as the choice criterion)
+                  (the decider's choice criterion)
   - instructions: plain-language rule for HOW this role should answer
                   (sent to the model as a system message)
   - tools:        what the role may do to files on this computer (nothing by default)
@@ -32,12 +32,6 @@ class ToolAccess(BaseModel):
     @property
     def any_on(self) -> bool:
         return self.read != "off" or self.write != "off" or self.bash != "off" or self.mcp != "off"
-
-    def pi_tools(self) -> list[str]:
-        """Pi's tool names for what is switched on."""
-        return (["read", "grep", "find", "ls"] if self.read != "off" else []) \
-            + (["write", "edit"] if self.write != "off" else []) + (["bash"] if self.bash != "off" else []) \
-            + (["mcp"] if self.mcp != "off" else [])
 
     def policy(self) -> dict[str, str]:
         """Per-tool rule for the approval gate. Reading needs no approval."""
@@ -79,34 +73,34 @@ class Role(BaseModel):
     instructions: str = Field(default="", max_length=2000)
     tools: ToolAccess = Field(default_factory=ToolAccess)
     reasoning: ReasoningLevel = "default"
-    web_search: bool = False     # let the model search the web (OpenRouter's web plugin; costs a little per search)
+    web_search: bool = False     # let the model search the web (OpenClaw's web_search tool)
 
     @field_validator("model")
     @classmethod
     def _model_has_provider(cls, v: str) -> str:
         if "/" not in v:
-            raise ValueError("model must be an OpenRouter id like 'anthropic/claude-sonnet-5'")
+            raise ValueError("model must be an Ollama id like 'ollama/gemma4:31b'")
         return v.strip()
 
 
 DEFAULT_ROLES: list[Role] = [
     Role(
-        id="reasoning", name="Thinker", model="qwen/qwen3.8-27b:free",
+        id="reasoning", name="Thinker", model="ollama/nemotron-3-super",
         when="Complex analysis, multi-step reasoning, math, planning, weighing decisions.",
         instructions="Think step by step. Be precise and show the key reasoning.",
     ),
     Role(
-        id="chitchat", name="Buddy", model="nvidia/nemotron-3-ultra-550b-a55b:free",
+        id="chitchat", name="Buddy", model="ollama/nemotron-3-nano:30b",
         when="Casual conversation, greetings, opinions, quick factual questions.",
         instructions="Be friendly and brief.",
     ),
     Role(
-        id="writing", name="Writer", model="nvidia/nemotron-3-super-120b-a12b:free",
+        id="writing", name="Writer", model="ollama/gemma4:31b",
         when="Writing, editing, summarizing, translating, drafting emails or documents.",
         instructions="Write clearly and match the tone the user asks for.",
     ),
     Role(
-        id="coding", name="Coder", model="z-ai/glm-5.2:free",
+        id="coding", name="Coder", model="ollama/gpt-oss:120b",
         when="Writing, debugging or explaining code, technical design, scripts and commands.",
         instructions="Show the code first, then a short explanation. Point out edge cases.",
     ),

@@ -23,25 +23,14 @@ export function renderFeed() {
   const inner = $('feedInner'); inner.innerHTML = '';
   const channel = currentChannel();
   const shown = state.messages.map((m, i) => [m, i]).filter(([m]) => channelOf(m) === channel);
-  const cut = state.compaction ? state.messages.findIndex((m) => m.id === state.compaction.through_id) : -1;
   const waiting = state.pending && state.pending.channel === channel;
   if (!shown.length && !waiting) { showEmpty(); return; }
-  let lastQuestion = '', lastFiles = [], marked = false;
-  shown.forEach(([m, i], n) => {
-    if (cut >= 0 && !marked && n > 0 && i > cut) { addSummaryNote(state.compaction.summary); marked = true; }
+  let lastQuestion = '', lastFiles = [];
+  shown.forEach(([m]) => {
     if (m.role === 'user') { lastQuestion = m.content; lastFiles = m.attachments || []; addOwner(m.content, m.created_at, lastFiles); }
     else addAgent(m.content, m.metadata || {}, m.created_at, lastQuestion, lastFiles);
   });
   if (waiting) { addTyping(state.pending.roleId); state.approvals.forEach(addApproval); }
-}
-
-// Where the AIs' view of the conversation changes: everything above is now a summary for them (you still see it all).
-function addSummaryNote(summary) {
-  const wrap = el('div', 'summary-note'), btn = el('button', null, 'Messages above were summarised for the AIs · View summary');
-  const body = el('div', 'md summary-body'); body.innerHTML = renderMarkdown(summary); body.style.display = 'none';
-  btn.onclick = () => { body.style.display = body.style.display === 'none' ? '' : 'none'; };
-  wrap.append(btn, body);
-  $('feedInner').appendChild(wrap);
 }
 
 function showEmpty() {
@@ -54,7 +43,7 @@ function showEmpty() {
   } else {
     const ws = currentWorkspace();
     box.append(el('h1', null, ws ? ws.name : 'One workspace. Every AI.'),
-      el('p', null, 'Everything in this workspace shares one conversation and one memory. Jev routes each message here to the right agent, or open an agent to talk to it directly — it still sees everything.'));
+      el('p', null, 'Everything in this workspace shares one conversation and one memory. Laya routes each message here to the right agent, or open an agent to talk to it directly — it still sees everything.'));
     const agents = el('div', 'empty-agents');
     state.roles.forEach((r) => {
       const chip = el('button', 'chip-btn'); chip.append(avatar(r), el('span', null, `${r.name} · ${shortModel(r.model)}`));
@@ -92,12 +81,12 @@ function addAgent(text, meta, iso, question, files = []) {
   if (meta.model && meta.model !== 'none') head.append(el('span', 'tag', shortModel(meta.model)));
   if (meta.decided_by === 'ollama') {
     head.append(el('span', 'tag jev', `⚡ Nemotron ${Math.round((meta.confidence || 0) * 100)}%`));
-  } else if (meta.decided_by === 'jev' || meta.decided_by === 'laya') {
-    head.append(el('span', 'tag jev', `${meta.decided_by === 'jev' ? 'Jev' : 'Laya'} ${Math.round((meta.confidence || 0) * 100)}%`));
+  } else if (meta.decided_by === 'laya') {
+    head.append(el('span', 'tag jev', `Laya ${Math.round((meta.confidence || 0) * 100)}%`));
   }
   if (meta.decided_by === 'fallback') {
-    const t = el('span', 'tag warn', 'Jev/Laya unavailable — default agent');
-    t.title = 'The decider (Jev or Laya) could not be reached, so the first agent answered.'; head.append(t);
+    const t = el('span', 'tag warn', 'Decider unavailable — default agent');
+    t.title = 'The decider (Laya or Nemotron) could not be reached, so the first agent answered.'; head.append(t);
   }
   if (meta.memory_saved) head.append(el('span', 'tag mem', 'Saved to memory'));
   const body = el('div', 'md'); body.innerHTML = renderMarkdown(text);
@@ -134,7 +123,7 @@ function addTyping(roleId) {
   const col = el('div', 'msg-col'), head = el('div', 'msg-head');
 
   let title = 'Deciding which agent answers…';
-  if (act.step === 'routing') title = '⚡ Routing intent (Nemotron-3-nano / Jev)…';
+  if (act.step === 'routing') title = '⚡ Routing intent (Nemotron-3-nano / Laya)…';
   else if (agentName) title = `${agentName} is working…`;
 
   head.append(el('span', 'msg-name', title));
@@ -228,7 +217,7 @@ export function send() {
   return ask(text, state.target, takeAttached());
 }
 
-// Send `text` (and the already-uploaded `files`) to a specific agent (roleId) or let Jev pick (roleId = null).
+// Send `text` (and the already-uploaded `files`) to a specific agent (roleId) or let the decider pick (roleId = null).
 // The message belongs to the room you're in when you send it, even if you switch rooms while waiting.
 async function ask(text, roleId, files = []) {
   if (state.busy) return;
