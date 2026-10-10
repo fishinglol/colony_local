@@ -140,6 +140,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
                 connectors=connectors_for(role),
                 media=media,
                 folder=folder,
+                team=[(r.name, r.instructions) for r in roles],
             )
             reply_text = openclaw_res.reply
             actual_model = openclaw_res.model

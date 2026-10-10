@@ -1,6 +1,21 @@
 # Active Context — Colony Local
 _Last updated: 2026-10-09 (direction change to OpenClaw-first recorded; before it: OpenClaw Gateway + Plugin Manager + Agent Capabilities + Ollama system prompt pairing complete)_
 
+## ✅ Persona in SOUL.md, memory rules in AGENTS.md (2026-10-10, third pass)
+- `engine/openclaw.write_team_files` writes the workspace's **SOUL.md** (one `## <Name>` section per role = its instructions from the agent
+  editor), **AGENTS.md** (shared-memory rules with absolute paths, "never say saved unless it succeeded", bilingual `memory_search`) and
+  a one-line IDENTITY.md (stops OpenClaw seeding its ~1.5 KB persona templates). OpenClaw injects them on a session's first turn.
+- The per-request system message is now only "You are <Name> (persona = `## <Name>` of SOUL.md)" + permission lines (web/read/write/exec,
+  connectors, project folder). Prompt tokens per agent ~4.1-4.8k (was 17.5k seen for a coder before).
+- Because bootstrap files are read once per session, the session key carries a hash of SOUL+AGENTS (`build_session_user(..., persona)`):
+  editing a persona starts a fresh OpenClaw session (history is re-sent once). Live: BANANA persona obeyed from SOUL.md alone; after
+  editing to PAPAYA the next turn used PAPAYA; another role in the same workspace was unaffected.
+- One SOUL.md is shared by all roles of a Colony workspace (the folder is shared for memory), so each agent sees the others' persona
+  text too (small). Per-role folders would need symlinks for memory — not done.
+- Found: the Gateway restarts itself ("hot reload recovery: cron monitor") when a config reload races with a new agent's database
+  preparation right after startup -> that request got HTTP 500. `_gateway_post` now waits for the Gateway to come back and re-sends once
+  (only if it really went down); `ensure_agent` waits 150 s. 128 tests pass.
+
 ## ✅ Dreaming / Colony-down / cross-language memory (2026-10-10, second pass)
 - **Dreaming promotion proven** with a throwaway agent: 4 `memory search` queries -> `memory promote --apply` (thresholds lowered
   by CLI flags) wrote the line into MEMORY.md with `<!-- trigger -->`/`<!-- importance -->` tags. At the DEFAULT thresholds (min-score

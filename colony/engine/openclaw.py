@@ -9,6 +9,7 @@ sandboxed tools (bash/read/write), and SQLite episodic memory.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -56,12 +57,14 @@ def build_session_user(
     workspace_id: str,
     agent_id: str | None,
     channel: str | None = None,
+    persona: str = "",
 ) -> str:
-    """Stable per-conversation session identifier passed as the OpenAI `user` field."""
+    """Stable per-conversation session identifier passed as the OpenAI `user` field. `persona` (a short hash of the agent's
+    SOUL/AGENTS text) is part of it, so editing a persona starts a fresh OpenClaw session: bootstrap files are read once per session."""
     ws = "".join(c for c in workspace_id if c.isalnum() or c in ("-", "_")) or "default"
     ch = "".join(c for c in (channel or "main") if c.isalnum() or c in ("-", "_")) or "main"
     ag = "".join(c for c in (agent_id or "anon") if c.isalnum() or c in ("-", "_")) or "anon"
-    return f"ome-{ws}-{ch}-{ag}"
+    return f"ome-{ws}-{ch}-{ag}" + (f"-{persona}" if persona else "")
 
 def config_path() -> Path:
     """OpenClaw's config file (the same override OpenClaw itself honours)."""
@@ -104,20 +107,57 @@ def memory_dir(settings: Settings, workspace_id: str) -> Path:
     return settings.data_dir / "self_improve" / workspace_id
 
 
-_MEMORY_RULES = """# Memory
-This folder is the team's shared memory, plain files every teammate reads and writes.
-- MEMORY.md: lasting facts and decisions.  USER.md: what you know about the user (preferences, background).
-- When the user asks you to remember something, or tells you a lasting fact, add one short line to the right file
-  (read it first, do not duplicate). Daily notes go in memory/YYYY-MM-DD.md.
+def agents_md(memory: Path) -> str:
+    """AGENTS.md of the workspace: how the team's shared memory works. OpenClaw reads it into every session's first turn."""
+    return f"""# Team memory (managed by Colony)
+The folder {memory} is the team's shared memory: plain files every teammate reads and writes, with the read, write and edit tools,
+always allowed for these files. Use absolute paths.
+- MEMORY.md: lasting facts and decisions.  USER.md: what you know about the user (preferences, background).  memory/YYYY-MM-DD.md: daily notes.
+
+## Keeping things
+For every user message decide whether it holds a lasting fact worth keeping (name, preference, pet, decision, project detail).
+If it does, your first action is a tool call: edit {memory}/USER.md for facts about the user, {memory}/MEMORY.md for anything else
+(read the file first, keep existing lines, add one short line). After the tool result, confirm briefly.
+Never say you saved something unless that tool call succeeded.
+
+## Recalling things
+Call memory_search. It matches words, not meaning, and not across languages: search again with the key words in the user's language
+AND in English (and a synonym) before you say nothing was found.
 """
+
+
+def soul_md(team: list[tuple[str, str]]) -> str:
+    """SOUL.md of the workspace: the personas of the team, one section per teammate (set in Colony's agent editor)."""
+    sections = "\n\n".join(f"## {name}\n{instructions.strip() or 'Help the user complete their request.'}" for name, instructions in team)
+    return ("# Team (managed by Colony)\nSeveral teammates share this workspace and its memory. Each request begins with a line saying "
+            "which teammate you are: be that teammate, with the persona of its section below.\n\n" + sections + "\n")
+
+
+IDENTITY_MD = "# Identity\nYour name is the teammate named in the first line of each request. Personas are in SOUL.md.\n"
+
+
+def _write_if_changed(path: Path, text: str) -> None:
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
 
 
 def _seed_memory_dir(path: Path) -> None:
     """Create the files OpenClaw would otherwise fill with its big templates (a persona ritual, ~4k tokens a session)."""
     (path / "memory").mkdir(parents=True, exist_ok=True)
-    for name, text in (("AGENTS.md", _MEMORY_RULES), ("MEMORY.md", "# Memory\n"), ("USER.md", "# User\n")):
+    for name, text in (("AGENTS.md", agents_md(path)), ("IDENTITY.md", IDENTITY_MD), ("MEMORY.md", "# Memory\n"), ("USER.md", "# User\n")):
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
+
+
+def write_team_files(settings: Settings, workspace_id: str, team: list[tuple[str, str]]) -> str:
+    """Write the workspace's AGENTS.md and SOUL.md (rewritten when they changed). Returns a short hash of both: the persona tag."""
+    folder = memory_dir(settings, workspace_id)
+    _seed_memory_dir(folder)
+    rules, soul = agents_md(folder), soul_md(team)
+    _write_if_changed(folder / "AGENTS.md", rules)
+    _write_if_changed(folder / "SOUL.md", soul)
+    _write_if_changed(folder / "IDENTITY.md", IDENTITY_MD)
+    return hashlib.sha1((rules + soul).encode("utf-8")).hexdigest()[:8]
 
 
 MAX_IMAGES = 8      # the Gateway's limit of image_url parts per request
@@ -208,7 +248,7 @@ def _quiet_background(cfg: dict[str, Any]) -> bool:
 
 def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None, web_search: bool = False,
                  connectors: list[str] | None = None, folder: str | None = None, memory: Path | None = None,
-                 wait_seconds: float = 60.0) -> None:
+                 wait_seconds: float = 150.0) -> None:
     """Make sure OpenClaw has this agent, set up lean: add/update it in OpenClaw's config (hot reload) and wait until listed.
 
     Lean on purpose: OpenClaw's default prompt is ~46k tokens (every tool schema + skills + bootstrap files); with only the
@@ -330,8 +370,27 @@ def remove_agents(settings: Settings, workspace_id: str) -> None:
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def _gateway_post(settings: Settings, payload: dict, model: str | None, timeout: float, path: str = "/v1/chat/completions") -> dict:
-    """POST a chat completion to the Gateway. `model` (ollama/…) is the real model the agent should use for this call."""
+def _gateway_restarted(settings: Settings, wait: float = 200.0) -> bool:
+    """After a failed call: did the Gateway restart itself? (OpenClaw does after a config reload it cannot apply live, e.g. while a
+    new agent's database is still being prepared.) If it went down, wait for it to come back and say True; if it stayed up, False."""
+    for _ in range(10):
+        if not is_openclaw_available(settings):
+            break
+        time.sleep(1)
+    else:
+        return False
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if is_openclaw_available(settings):
+            return True
+        time.sleep(3)
+    return False
+
+
+def _gateway_post(settings: Settings, payload: dict, model: str | None, timeout: float, path: str = "/v1/chat/completions",
+                  _retry: bool = True) -> dict:
+    """POST a chat completion to the Gateway. `model` (ollama/…) is the real model the agent should use for this call.
+    If the Gateway restarted under the call, it is sent once more when the Gateway is back."""
     gateway_url = settings.openclaw_gateway_url.rstrip("/")
     headers = {"Content-Type": "application/json"}
     if settings.openclaw_gateway_token:
@@ -346,10 +405,14 @@ def _gateway_post(settings: Settings, payload: dict, model: str | None, timeout:
     except urllib.error.HTTPError as exc:
         err_msg = exc.read().decode("utf-8", errors="replace")
         logger.error("OpenClaw Gateway HTTP %s: %s", exc.code, err_msg)
+        if _retry and exc.code >= 500 and _gateway_restarted(settings):
+            return _gateway_post(settings, payload, model, timeout, path, _retry=False)
         raise ProviderError(f"OpenClaw Gateway request failed ({exc.code}): {err_msg[:200]}",
                             status=exc.code, provider_message=err_msg) from exc
     except OSError as exc:
         logger.error("OpenClaw Gateway connection error: %s", exc)
+        if _retry and _gateway_restarted(settings):
+            return _gateway_post(settings, payload, model, timeout, path, _retry=False)
         raise ProviderError(f"OpenClaw Gateway unreachable at {gateway_url} ({exc})", status=None) from exc
 
 
@@ -445,20 +508,22 @@ def run_openclaw_turn(
     connectors: list[str] | None = None,
     media: list[dict] | None = None,
     folder: str | None = None,
+    team: list[tuple[str, str]] | None = None,
     timeout: float = 600.0,
 ) -> OpenClawTurnResult:
     """Execute one turn through OpenClaw Gateway.
     
     Streams status to ActivityTracker so live commands show up on Colony UI.
     """
-    # Each Colony role is its own OpenClaw agent; the persona still travels in the system prompt.
+    # Each Colony role is its own OpenClaw agent; personas live in the workspace's SOUL.md, the memory rules in its AGENTS.md.
     agent_id = agent_id_for(workspace_id, role_id)
     connectors = connectors if getattr(tools, "mcp", "off") != "off" else []
     memory = memory_dir(settings, workspace_id)
     ensure_agent(settings, agent_id, role_name, tools=tools, web_search=web_search, connectors=connectors,
                  folder=str(folder) if folder else None, memory=memory)
     model = f"openclaw/{agent_id}"
-    session_user = build_session_user(workspace_id, role_id, channel)
+    persona = write_team_files(settings, workspace_id, team or [(role_name, role_instructions)])
+    session_user = build_session_user(workspace_id, role_id, channel, persona)
 
     # Assemble messages
     messages: list[dict[str, Any]] = []
@@ -467,16 +532,10 @@ def run_openclaw_turn(
     else:
         cap_lines = []
         if web_search:
-            cap_lines.append(
-                "- Web Search: ENABLED (Available Tool: `web_search` via DuckDuckGo)\n"
-                "  * CRITICAL REAL-TIME GROUNDING: Your internal training cutoff has no live data. "
-                "You DO NOT know current prices (e.g. Bitcoin, crypto, stock market), live news, weather, or current events in 2026. "
-                "If the user asks for current prices, recent events, or asks to search the web, you MUST NOT hallucinate or guess from memory. "
-                "You MUST call the `web_search` tool (e.g. query='bitcoin price usd today') to retrieve verified live data before providing your answer."
-            )
+            cap_lines.append("- Web search: ENABLED (tool `web_search`). You have no live data: for prices, news, weather or anything recent, "
+                             "call it first and never answer from memory.")
         else:
-            cap_lines.append("- Web Search: DISABLED (Rely only on internal knowledge and workspace files)")
-
+            cap_lines.append("- Web search: DISABLED (rely on what you know and on workspace files)")
         if tools:
             r = getattr(tools, "read", "off")
             w = getattr(tools, "write", "off")
@@ -484,14 +543,6 @@ def run_openclaw_turn(
             cap_lines.append(f"- Project files, read: {'ALLOWED (tool: read)' if r != 'off' else 'DISABLED'}")
             cap_lines.append(f"- Project files, write/edit: {'ALLOWED (tools: write, edit)' if w != 'off' else 'DISABLED'}")
             cap_lines.append(f"- Run commands: {'ALLOWED (tool: exec)' if b != 'off' else 'DISABLED'}")
-        cap_lines.append(
-            f"- Shared memory folder: {memory} (always allowed with the read, write and edit tools, whatever the project-file lines above say)\n"
-            f"  * For every user message, decide whether it holds a lasting fact worth keeping (name, preference, pet, decision, project detail). "
-            f"If it does, your first action must be a tool call: edit {memory}/USER.md for facts about the user, {memory}/MEMORY.md for anything else "
-            f"(absolute paths; read the file first, keep existing lines, add one short line). After the tool result, confirm briefly.\n"
-            f"  * Never say you saved something unless that tool call succeeded.\n"
-            f"  * To recall something, call memory_search. It matches words, not meaning, and not across languages: search again with the key words "
-            f"in the user's language AND in English (and a synonym) before you say nothing was found.")
         if connectors:
             cap_lines.append(f"- Connected apps (MCP servers): {', '.join(connectors)}. Their tools are named <server>__<tool>.")
             apps = getattr(tools, "mcp_apps", None)
@@ -500,16 +551,7 @@ def run_openclaw_turn(
         if folder:
             cap_lines.append(f"- Workspace Project Folder: {folder}")
 
-        cap_text = "\n".join(cap_lines)
-        instructions_text = role_instructions or "Help the user complete their request."
-        full_sys = (
-            f"You are {role_name}.\n"
-            f"Role instructions: {instructions_text}\n\n"
-            f"[Tools & Execution Environment]\n"
-            f"You are operating within OpenClaw. You have access to real tools to fetch real-world data and interact with the environment.\n"
-            f"{cap_text}\n\n"
-            f"Always use your available tools when needed instead of answering with unverified assumptions."
-        )
+        full_sys = f"You are {role_name} (your persona is the \"## {role_name}\" section of SOUL.md).\n" + "\n".join(cap_lines)
         messages.append({"role": "system", "content": full_sys})
 
     # Agent replies in the history already carry their "[Name]" label; roles are kept as they are.

@@ -320,7 +320,7 @@ def test_a_pdf_goes_to_the_responses_endpoint_as_an_input_file(monkeypatch, tmp_
                                      workspace_id="ws_1", channel="auto", user_message="summarise", media=[ref])
     assert res.reply == "It says hi." and seen["path"] == "/v1/responses" and seen["model"] == "ollama/x"
     body = seen["payload"]
-    assert "Be brief." in body["instructions"] and body["model"] == "openclaw/ws_1-coder"
+    assert "## Coder" in body["instructions"] and body["model"] == "openclaw/ws_1-coder"
     last = body["input"][-1]["content"]
     assert last[0] == {"type": "input_text", "text": "summarise"}
     assert last[1] == {"type": "input_file", "source": {"type": "base64", "media_type": "application/pdf",
@@ -336,3 +336,77 @@ def test_responses_endpoint_and_system_agent_are_switched_on_once():
     assert openclaw._set_system_agent(cfg) is False
     owned = {"agents": {"defaults": {"systemAgent": {"agentId": "ops"}}}}
     assert openclaw._set_system_agent(owned) is False and owned["agents"]["defaults"]["systemAgent"]["agentId"] == "ops"
+
+
+def test_personas_live_in_soul_md_and_memory_rules_in_agents_md(tmp_path):
+    settings = Settings(data_dir=tmp_path)
+    team = [("Coder", "Show code first."), ("Buddy", "")]
+    tag = openclaw.write_team_files(settings, "ws_1", team)
+    folder = openclaw.memory_dir(settings, "ws_1")
+    soul = (folder / "SOUL.md").read_text()
+    assert "## Coder\nShow code first." in soul and "## Buddy\nHelp the user complete their request." in soul
+    rules = (folder / "AGENTS.md").read_text()
+    assert f"{folder}/USER.md" in rules and "memory_search" in rules and "English" in rules      # absolute paths: the agent's cwd is the project
+    assert (folder / "IDENTITY.md").read_text().startswith("# Identity") and (folder / "memory").is_dir()
+
+    assert openclaw.write_team_files(settings, "ws_1", team) == tag                      # nothing changed: same tag
+    (folder / "AGENTS.md").write_text("old text")                                         # a stale managed file is put right
+    assert openclaw.write_team_files(settings, "ws_1", team) == tag and "memory_search" in (folder / "AGENTS.md").read_text()
+    assert openclaw.write_team_files(settings, "ws_1", [("Coder", "Be rude."), ("Buddy", "")]) != tag   # edited persona: new tag
+
+
+def test_an_edited_persona_starts_a_new_openclaw_session():
+    old = openclaw.build_session_user("ws_1", "coder", "auto", "abc12345")
+    assert old == "ome-ws_1-auto-coder-abc12345" and old != openclaw.build_session_user("ws_1", "coder", "auto", "ffff0000")
+
+
+def test_the_request_carries_only_the_name_and_permissions(monkeypatch, tmp_path):
+    settings = Settings(openclaw_gateway_url="http://127.0.0.1:18789", data_dir=tmp_path)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    seen = {}
+    monkeypatch.setattr(openclaw, "_gateway_post", lambda settings, payload, model, timeout, path="": (seen.update(payload=payload) or
+                        {"choices": [{"message": {"content": "ok"}}]}))
+    openclaw.run_openclaw_turn(settings=settings, role_id="coder", role_name="Coder", role_model="ollama/x", role_instructions="SECRET PERSONA",
+                               workspace_id="ws_1", channel="auto", user_message="hi", tools=ToolAccess(read="allow"))
+    system = seen["payload"]["messages"][0]["content"]
+    assert system.startswith("You are Coder") and "SECRET PERSONA" not in system and "Project files, read: ALLOWED" in system
+    assert "Shared memory folder" not in system and "memory_search" not in system
+    assert "SECRET PERSONA" in (openclaw.memory_dir(settings, "ws_1") / "SOUL.md").read_text()
+    assert seen["payload"]["user"].startswith("ome-ws_1-auto-coder-")
+
+
+def test_a_call_is_sent_again_when_the_gateway_restarted_under_it(monkeypatch):
+    settings = Settings(openclaw_gateway_url="http://127.0.0.1:18789")
+    calls = []
+
+    class Ok:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self): return b'{"ok": true}'
+
+    def flaky(req, timeout=None):
+        calls.append(1)
+        if len(calls) == 1:
+            import io, urllib.error
+            raise urllib.error.HTTPError("u", 500, "x", {}, io.BytesIO(b"boom"))
+        return Ok()
+
+    monkeypatch.setattr(openclaw.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(openclaw, "_gateway_restarted", lambda s, wait=200.0: True)
+    assert openclaw._gateway_post(settings, {}, None, 5) == {"ok": True} and len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr(openclaw, "_gateway_restarted", lambda s, wait=200.0: False)      # it stayed up: a genuine error, no second try
+    with pytest.raises(ProviderError):
+        openclaw._gateway_post(settings, {}, None, 5)
+    assert len(calls) == 1
+
+
+def test_gateway_restarted_means_it_went_down_and_came_back(monkeypatch):
+    settings = Settings()
+    monkeypatch.setattr(openclaw.time, "sleep", lambda s: None)
+    up = iter([True, True, False, False, True])       # up, up, down, down, back
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda s=None: next(up))
+    assert openclaw._gateway_restarted(settings) is True
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda s=None: True)            # never went down
+    assert openclaw._gateway_restarted(settings) is False
