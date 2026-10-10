@@ -320,7 +320,7 @@ def test_a_pdf_goes_to_the_responses_endpoint_as_an_input_file(monkeypatch, tmp_
                                      workspace_id="ws_1", channel="auto", user_message="summarise", media=[ref])
     assert res.reply == "It says hi." and seen["path"] == "/v1/responses" and seen["model"] == "ollama/x"
     body = seen["payload"]
-    assert "## Coder" in body["instructions"] and body["model"] == "openclaw/ws_1-coder"
+    assert "You are Coder" in body["instructions"] and body["model"] == "openclaw/ws_1-coder"
     last = body["input"][-1]["content"]
     assert last[0] == {"type": "input_text", "text": "summarise"}
     assert last[1] == {"type": "input_file", "source": {"type": "base64", "media_type": "application/pdf",
@@ -338,21 +338,31 @@ def test_responses_endpoint_and_system_agent_are_switched_on_once():
     assert openclaw._set_system_agent(owned) is False and owned["agents"]["defaults"]["systemAgent"]["agentId"] == "ops"
 
 
-def test_personas_live_in_soul_md_and_memory_rules_in_agents_md(tmp_path):
+def test_every_agent_has_its_own_soul_and_the_shared_user_md_is_copied_in(tmp_path):
     settings = Settings(data_dir=tmp_path)
-    team = [("Coder", "Show code first."), ("Buddy", "")]
-    tag = openclaw.write_team_files(settings, "ws_1", team)
-    folder = openclaw.memory_dir(settings, "ws_1")
-    soul = (folder / "SOUL.md").read_text()
-    assert "## Coder\nShow code first." in soul and "## Buddy\nHelp the user complete their request." in soul
-    rules = (folder / "AGENTS.md").read_text()
-    assert f"{folder}/USER.md" in rules and "memory_search" in rules and "English" in rules      # absolute paths: the agent's cwd is the project
-    assert (folder / "IDENTITY.md").read_text().startswith("# Identity") and (folder / "memory").is_dir()
+    shared = openclaw.memory_dir(settings, "ws_1")
+    openclaw._seed_memory_dir(shared)
+    (shared / "USER.md").write_text("# User\n- likes tea\n")
+    coder = openclaw.write_agent_files(settings, "ws_1", "ws_1-coder", "Coder", "Show code first.")
+    buddy = openclaw.write_agent_files(settings, "ws_1", "ws_1-buddy", "Buddy", "")
+    c, b = openclaw.agent_dir(settings, "ws_1-coder"), openclaw.agent_dir(settings, "ws_1-buddy")
+    assert (c / "SOUL.md").read_text() == "# Coder\nShow code first.\n"                     # only its own persona
+    assert (b / "SOUL.md").read_text() == "# Buddy\nHelp the user complete their request.\n"
+    assert "Coder" in (c / "IDENTITY.md").read_text() and (c / "USER.md").read_text() == "# User\n- likes tea\n"
+    rules = (c / "AGENTS.md").read_text()
+    assert f"{shared}/USER.md" in rules and "memory_search" in rules and "English" in rules      # absolute paths: the agent's cwd is the project
+    assert (c / "memory").is_dir() and (c / "MEMORY.md").exists() and coder != buddy
+    assert not (shared / "SOUL.md").exists()                                                # the shared folder holds memory only
 
-    assert openclaw.write_team_files(settings, "ws_1", team) == tag                      # nothing changed: same tag
-    (folder / "AGENTS.md").write_text("old text")                                         # a stale managed file is put right
-    assert openclaw.write_team_files(settings, "ws_1", team) == tag and "memory_search" in (folder / "AGENTS.md").read_text()
-    assert openclaw.write_team_files(settings, "ws_1", [("Coder", "Be rude."), ("Buddy", "")]) != tag   # edited persona: new tag
+    assert openclaw.write_agent_files(settings, "ws_1", "ws_1-coder", "Coder", "Show code first.") == coder   # nothing changed: same tag
+    (c / "AGENTS.md").write_text("old text")                                                  # a stale managed file is put right
+    assert openclaw.write_agent_files(settings, "ws_1", "ws_1-coder", "Coder", "Show code first.") == coder
+    assert "memory_search" in (c / "AGENTS.md").read_text()
+    assert openclaw.write_agent_files(settings, "ws_1", "ws_1-coder", "Coder", "Be rude.") != coder      # edited persona: new tag
+
+    (shared / "USER.md").write_text("# User\n- likes coffee\n")                               # the copy follows the shared file
+    openclaw.write_agent_files(settings, "ws_1", "ws_1-coder", "Coder", "Be rude.")
+    assert "likes coffee" in (c / "USER.md").read_text()
 
 
 def test_an_edited_persona_starts_a_new_openclaw_session():
@@ -371,7 +381,7 @@ def test_the_request_carries_only_the_name_and_permissions(monkeypatch, tmp_path
     system = seen["payload"]["messages"][0]["content"]
     assert system.startswith("You are Coder") and "SECRET PERSONA" not in system and "Project files, read: ALLOWED" in system
     assert "Shared memory folder" not in system and "memory_search" not in system
-    assert "SECRET PERSONA" in (openclaw.memory_dir(settings, "ws_1") / "SOUL.md").read_text()
+    assert "SECRET PERSONA" in (openclaw.agent_dir(settings, "ws_1-coder") / "SOUL.md").read_text()
     assert seen["payload"]["user"].startswith("ome-ws_1-auto-coder-")
 
 

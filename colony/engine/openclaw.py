@@ -103,16 +103,23 @@ def agent_id_for(workspace_id: str, role_id: str) -> str:
 
 def memory_dir(settings: Settings, workspace_id: str) -> Path:
     """The OpenClaw workspace shared by every agent of one Colony workspace. Its MEMORY.md, USER.md and memory/YYYY-MM-DD.md
-    are the team's memory: OpenClaw injects and searches them, agents write them, and Colony's Memory window just shows them."""
+    are the team's memory: every agent searches them (extraPaths) and writes them, and Colony's Memory window just shows them."""
     return settings.data_dir / "self_improve" / workspace_id
 
 
+def agent_dir(settings: Settings, agent_id: str) -> Path:
+    """The OpenClaw workspace of ONE agent: its own AGENTS.md, SOUL.md, IDENTITY.md, USER.md copy and dreaming output.
+    OpenClaw reads persona files only from an agent's workspace, so this is what makes each agent's identity its own."""
+    return settings.data_dir / "openclaw-agents" / agent_id
+
+
 def agents_md(memory: Path) -> str:
-    """AGENTS.md of the workspace: how the team's shared memory works. OpenClaw reads it into every session's first turn."""
+    """AGENTS.md of an agent: how the team's shared memory works. OpenClaw reads it into the session's first turn."""
     return f"""# Team memory (managed by Colony)
 The folder {memory} is the team's shared memory: plain files every teammate reads and writes, with the read, write and edit tools,
-always allowed for these files. Use absolute paths.
+always allowed for these files. Use absolute paths, and write there (not in this workspace).
 - MEMORY.md: lasting facts and decisions.  USER.md: what you know about the user (preferences, background).  memory/YYYY-MM-DD.md: daily notes.
+- USER.md in your own workspace is only a copy of the shared one, made before each turn.
 
 ## Keeping things
 For every user message decide whether it holds a lasting fact worth keeping (name, preference, pet, decision, project detail).
@@ -121,19 +128,18 @@ If it does, your first action is a tool call: edit {memory}/USER.md for facts ab
 Never say you saved something unless that tool call succeeded.
 
 ## Recalling things
-Call memory_search. It matches words, not meaning, and not across languages: search again with the key words in the user's language
-AND in English (and a synonym) before you say nothing was found.
+Call memory_search (it covers the shared memory and your own notes). It matches words, not meaning, and not across languages: search
+again with the key words in the user's language AND in English (and a synonym) before you say nothing was found.
 """
 
 
-def soul_md(team: list[tuple[str, str]]) -> str:
-    """SOUL.md of the workspace: the personas of the team, one section per teammate (set in Colony's agent editor)."""
-    sections = "\n\n".join(f"## {name}\n{instructions.strip() or 'Help the user complete their request.'}" for name, instructions in team)
-    return ("# Team (managed by Colony)\nSeveral teammates share this workspace and its memory. Each request begins with a line saying "
-            "which teammate you are: be that teammate, with the persona of its section below.\n\n" + sections + "\n")
+def soul_md(name: str, instructions: str) -> str:
+    """SOUL.md of one agent: who it is (set in Colony's agent editor)."""
+    return f"# {name}\n{instructions.strip() or 'Help the user complete their request.'}\n"
 
 
-IDENTITY_MD = "# Identity\nYour name is the teammate named in the first line of each request. Personas are in SOUL.md.\n"
+def identity_md(name: str) -> str:
+    return f"# Identity\n- **Name:** {name}\n"
 
 
 def _write_if_changed(path: Path, text: str) -> None:
@@ -142,22 +148,27 @@ def _write_if_changed(path: Path, text: str) -> None:
 
 
 def _seed_memory_dir(path: Path) -> None:
-    """Create the files OpenClaw would otherwise fill with its big templates (a persona ritual, ~4k tokens a session)."""
+    """The team's shared memory folder: MEMORY.md, USER.md, memory/ for daily notes."""
     (path / "memory").mkdir(parents=True, exist_ok=True)
-    for name, text in (("AGENTS.md", agents_md(path)), ("IDENTITY.md", IDENTITY_MD), ("MEMORY.md", "# Memory\n"), ("USER.md", "# User\n")):
+    for name, text in (("MEMORY.md", "# Memory\n"), ("USER.md", "# User\n")):
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
 
 
-def write_team_files(settings: Settings, workspace_id: str, team: list[tuple[str, str]]) -> str:
-    """Write the workspace's AGENTS.md and SOUL.md (rewritten when they changed). Returns a short hash of both: the persona tag."""
-    folder = memory_dir(settings, workspace_id)
-    _seed_memory_dir(folder)
-    rules, soul = agents_md(folder), soul_md(team)
-    _write_if_changed(folder / "AGENTS.md", rules)
-    _write_if_changed(folder / "SOUL.md", soul)
-    _write_if_changed(folder / "IDENTITY.md", IDENTITY_MD)
-    return hashlib.sha1((rules + soul).encode("utf-8")).hexdigest()[:8]
+def write_agent_files(settings: Settings, workspace_id: str, agent_id: str, name: str, instructions: str) -> str:
+    """Write one agent's persona files into its own workspace and copy the shared USER.md in (OpenClaw injects USER.md from the
+    agent's workspace). Returns a short hash of the persona files: the session tag (they are read once per session)."""
+    shared, mine = memory_dir(settings, workspace_id), agent_dir(settings, agent_id)
+    _seed_memory_dir(shared)
+    (mine / "memory").mkdir(parents=True, exist_ok=True)       # OpenClaw's dreaming writes its own notes here
+    rules, soul, identity = agents_md(shared), soul_md(name, instructions), identity_md(name)
+    _write_if_changed(mine / "AGENTS.md", rules)
+    _write_if_changed(mine / "SOUL.md", soul)
+    _write_if_changed(mine / "IDENTITY.md", identity)
+    _write_if_changed(mine / "USER.md", (shared / "USER.md").read_text(encoding="utf-8"))
+    if not (mine / "MEMORY.md").exists():
+        (mine / "MEMORY.md").write_text("# Memory\n", encoding="utf-8")      # long-term notes OpenClaw's dreaming promotes for this agent
+    return hashlib.sha1((rules + soul + identity).encode("utf-8")).hexdigest()[:8]
 
 
 MAX_IMAGES = 8      # the Gateway's limit of image_url parts per request
@@ -254,8 +265,8 @@ def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None
     Lean on purpose: OpenClaw's default prompt is ~46k tokens (every tool schema + skills + bootstrap files); with only the
     role's tools and no skills it is ~5k (measured 2026-10-09). The persona travels in the system prompt; the workspace files
     (our tiny AGENTS.md, MEMORY.md, USER.md) are injected only on a session's first turn (contextInjection "continuation-skip").
-    The agent's workspace is the Colony workspace's shared memory folder, never the user's project folder, because OpenClaw
-    writes its own files into an agent workspace. The model is chosen per turn (x-openclaw-model), not stored here.
+    The agent's workspace is its own folder (persona files; never the user's project folder, because OpenClaw writes its own files
+    into an agent workspace); the Colony workspace's shared memory folder is added to its memory search. The model is chosen per turn (x-openclaw-model), not stored here.
     """
     allow = _tool_allowlist(tools, web_search, connectors or [])
     with config_lock:
@@ -263,14 +274,18 @@ def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None
         agents = cfg.setdefault("agents", {})
         entries = agents.setdefault("entries", {})
         existing = entries.get(agent_id)
-        workspace = str(memory or settings.data_dir / "openclaw-agents" / agent_id)
+        workspace = str(agent_dir(settings, agent_id))
         want = {"name": name, "workspace": workspace, "tools": {"profile": "minimal", "alsoAllow": allow},
                 "contextInjection": "continuation-skip", "skills": []}
+        if memory:      # the team's shared memory is searched from every agent's own workspace
+            want["memory"] = {"search": {"extraPaths": [str(memory)]}}
         if folder:
             want["cwd"] = folder    # relative paths in file tools and commands start in the project folder
         gate_added = _register_gate(cfg, settings.approval_timeout_seconds) | _enable_memory_search(cfg) | _set_system_agent(cfg) | _enable_responses(cfg) | _quiet_background(cfg)
         if existing != want or gate_added:
-            _seed_memory_dir(Path(workspace))
+            Path(workspace).mkdir(parents=True, exist_ok=True)
+            if memory:
+                _seed_memory_dir(memory)
             entries.setdefault("main", {})   # keep the existing default agent once there is more than one
             entries[agent_id] = want
             agents["ownership"] = "explicit"  # OpenClaw refuses a multi-agent roster without this
@@ -356,6 +371,7 @@ def remove_agents(settings: Settings, workspace_id: str) -> None:
             del entries[agent_id]
             _known_agents.pop(agent_id, None)
             shutil.rmtree(config_path().parent / "agents" / agent_id, ignore_errors=True)
+            shutil.rmtree(agent_dir(settings, agent_id), ignore_errors=True)
         if gone:
             write_config(cfg)
     for path, key in ((_seen_file(settings), "ome-" + workspace_id + "-"), (_usage_file(settings), prefix)):
@@ -508,21 +524,20 @@ def run_openclaw_turn(
     connectors: list[str] | None = None,
     media: list[dict] | None = None,
     folder: str | None = None,
-    team: list[tuple[str, str]] | None = None,
     timeout: float = 600.0,
 ) -> OpenClawTurnResult:
     """Execute one turn through OpenClaw Gateway.
     
     Streams status to ActivityTracker so live commands show up on Colony UI.
     """
-    # Each Colony role is its own OpenClaw agent; personas live in the workspace's SOUL.md, the memory rules in its AGENTS.md.
+    # Each Colony role is its own OpenClaw agent; each agent's persona lives in its own workspace's SOUL.md, the memory rules in its AGENTS.md.
     agent_id = agent_id_for(workspace_id, role_id)
     connectors = connectors if getattr(tools, "mcp", "off") != "off" else []
     memory = memory_dir(settings, workspace_id)
     ensure_agent(settings, agent_id, role_name, tools=tools, web_search=web_search, connectors=connectors,
                  folder=str(folder) if folder else None, memory=memory)
     model = f"openclaw/{agent_id}"
-    persona = write_team_files(settings, workspace_id, team or [(role_name, role_instructions)])
+    persona = write_agent_files(settings, workspace_id, agent_id, role_name, role_instructions)
     session_user = build_session_user(workspace_id, role_id, channel, persona)
 
     # Assemble messages
@@ -551,7 +566,7 @@ def run_openclaw_turn(
         if folder:
             cap_lines.append(f"- Workspace Project Folder: {folder}")
 
-        full_sys = f"You are {role_name} (your persona is the \"## {role_name}\" section of SOUL.md).\n" + "\n".join(cap_lines)
+        full_sys = f"You are {role_name} (your persona is in SOUL.md).\n" + "\n".join(cap_lines)
         messages.append({"role": "system", "content": full_sys})
 
     # Agent replies in the history already carry their "[Name]" label; roles are kept as they are.

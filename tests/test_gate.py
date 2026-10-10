@@ -118,7 +118,7 @@ def test_any_role_may_keep_the_shared_memory_files_but_nothing_else_outside_its_
     assert answers.asked == []
 
 
-def test_agents_of_a_workspace_share_one_seeded_memory_folder(monkeypatch, tmp_path):
+def test_each_agent_has_its_own_workspace_and_all_search_the_shared_memory_folder(monkeypatch, tmp_path):
     from colony.config import Settings
     settings = Settings(openclaw_gateway_url="http://127.0.0.1:1", data_dir=tmp_path)
     monkeypatch.setattr(openclaw.urllib.request, "urlopen", lambda url, timeout=None: (_ for _ in ()).throw(OSError("no gateway")))
@@ -127,8 +127,11 @@ def test_agents_of_a_workspace_share_one_seeded_memory_folder(monkeypatch, tmp_p
         with pytest.raises(Exception):
             openclaw.ensure_agent(settings, f"ws_1-{role}", role, memory=mem, wait_seconds=0.1)
     entries = openclaw.read_config()["agents"]["entries"]
-    assert entries["ws_1-coder"]["workspace"] == entries["ws_1-buddy"]["workspace"] == str(mem)
-    assert (mem / "MEMORY.md").exists() and (mem / "USER.md").exists() and "shared memory" in (mem / "AGENTS.md").read_text()
+    assert entries["ws_1-coder"]["workspace"] != entries["ws_1-buddy"]["workspace"]          # one workspace (SOUL.md) per agent
+    assert entries["ws_1-coder"]["workspace"] == str(openclaw.agent_dir(settings, "ws_1-coder"))
+    for role in ("coder", "buddy"):
+        assert entries[f"ws_1-{role}"]["memory"] == {"search": {"extraPaths": [str(mem)]}}    # ...and one shared memory
+    assert (mem / "MEMORY.md").exists() and (mem / "USER.md").exists() and (mem / "memory").is_dir()
 
 
 def test_an_explicit_remember_request_is_kept_even_when_the_model_wrote_nothing(tmp_path):

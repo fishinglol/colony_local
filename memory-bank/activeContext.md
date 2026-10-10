@@ -1,6 +1,22 @@
 # Active Context — Colony Local
 _Last updated: 2026-10-09 (direction change to OpenClaw-first recorded; before it: OpenClaw Gateway + Plugin Manager + Agent Capabilities + Ollama system prompt pairing complete)_
 
+## ✅ SOUL.md per agent (2026-10-10, fourth pass; replaces the shared-SOUL.md note above)
+Owner: "each AI's identity differs, SOUL.md must be one per agent". Now each agent has its OWN OpenClaw workspace
+`~/.colony/openclaw-agents/<agent_id>/` with AGENTS.md (memory rules), SOUL.md (only its persona), IDENTITY.md (its name), a USER.md COPY
+and its own MEMORY.md/memory/ (where OpenClaw's dreaming writes for that agent). The team's memory stays shared in
+`~/.colony/self_improve/<ws>/` (MEMORY.md, USER.md, memory/YYYY-MM-DD.md): agents WRITE there by absolute path and every agent
+SEARCHES it through `agents.entries.<id>.memory.search.extraPaths`. `write_agent_files` runs each turn (persona hash = session tag; USER.md
+is re-copied shared -> agent each turn).
+- Tried first: symlinks (MEMORY.md/USER.md/memory -> shared) inside the agent folder: OpenClaw's indexer ignores symlinks ("No memory files
+  found"), so not usable. Real files + extraPaths work (CLI and live).
+- Live: Writer ends with BANANA, Coder with PAPAYA from their own SOUL.md; both knew a fact from shared USER.md; Writer saved a fact to
+  shared MEMORY.md and Coder found it with memory_search.
+- Consequences: dreaming promotion now lands in the agent's PRIVATE MEMORY.md (not the shared one); the Memory window in the UI shows the
+  shared folder only. Deleting a workspace removes the agent folders too (`remove_agents`).
+- Gauge caveat: `usage.prompt_tokens` is the sum over the model calls of a tool loop, so a turn with several tool calls shows e.g. 37k
+  although a plain turn is ~5k. 128 tests pass.
+
 ## ✅ Persona in SOUL.md, memory rules in AGENTS.md (2026-10-10, third pass)
 - `engine/openclaw.write_team_files` writes the workspace's **SOUL.md** (one `## <Name>` section per role = its instructions from the agent
   editor), **AGENTS.md** (shared-memory rules with absolute paths, "never say saved unless it succeeded", bilingual `memory_search`) and
