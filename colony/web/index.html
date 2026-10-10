@@ -13,32 +13,27 @@
   <!-- ── Left sidebar ── -->
   <aside id="sidebar">
     <div class="brand">
-      <div class="brand-mark"></div>
       <span class="brand-name">Colony</span>
-      <span class="brand-pill">LOCAL</span>
     </div>
     <button class="ws-switch" id="wsBtn" title="Switch workspace">
-      <span class="ws-label">Workspace</span>
       <span class="ws-name" id="wsName"></span>
-      <span class="ws-caret">▾</span>
+      <span class="ws-caret" data-icon="chevron"></span>
     </button>
 
     <div class="scroll">
-      <div class="group-label"><span>Channels</span></div>
       <button class="row" id="autoRow">
-        <span class="hash">#</span>
-        <span class="name">mix</span>
-        <span class="sub">Laya</span>
+        <span class="hash" data-icon="hash"></span>
+        <span class="name">All agents</span>
       </button>
 
-      <div class="group-label"><span>Direct Agents</span><button id="addAgentBtn" title="Add agent">＋</button></div>
+      <div class="group-label"><span>Agents</span><button id="addAgentBtn" title="Add agent" data-icon="plus"></button></div>
       <div id="agentList"></div>
     </div>
 
     <div class="sidebar-foot">
-      <button class="row" id="connectorsBtn"><span class="hash">⌁</span><span class="name">Connectors</span></button>
-      <button class="row" id="memoryBtn"><span class="hash">◎</span><span class="name">Memory</span></button>
-      <button class="row" id="settingsBtn"><span class="hash">⚙</span><span class="name">Settings</span><span class="dot" id="keyDot"></span></button>
+      <button class="row" id="connectorsBtn"><span class="hash" data-icon="plug"></span><span class="name">Connectors</span></button>
+      <button class="row" id="memoryBtn"><span class="hash" data-icon="memory"></span><span class="name">Team memory</span></button>
+      <button class="row" id="settingsBtn"><span class="hash" data-icon="settings"></span><span class="name">Settings</span><span class="dot" id="keyDot"></span></button>
     </div>
   </aside>
 
@@ -46,23 +41,23 @@
   <main>
     <header class="bar">
       <div class="bar-left">
-        <button class="chip-btn menu-btn" id="menuBtn">☰</button>
+        <button class="chip-btn menu-btn" id="menuBtn" data-icon="menu"></button>
         <div id="barAvatar"></div>
         <div style="min-width:0">
-          <div class="bar-title" id="barTitle"># mix</div>
+          <div class="bar-title" id="barTitle">All agents</div>
           <div class="bar-sub" id="barSub"></div>
         </div>
       </div>
       <div class="bar-right">
         <button class="chip-btn openclaw-pill" id="openclawPill" title="OpenClaw Gateway Engine Status">
           <span class="openclaw-dot" id="openclawDot"></span>
-          <span id="openclawLabel">OpenClaw Gateway</span>
+          <span id="openclawLabel">OpenClaw</span>
         </button>
         <div class="ctx-wrap">
           <button class="chip-btn" id="ctxBtn" title="How full each agent's context window is">Context</button>
           <div class="ctx-pop" id="ctxPop"></div>
         </div>
-        <button class="chip-btn" id="editAgentBtn" style="display:none">Edit agent</button>
+        <button class="chip-btn" id="editAgentBtn" style="display:none">Agent settings</button>
       </div>
     </header>
 
@@ -95,13 +90,22 @@
   </main>
 </div>
 
-<!-- Agent editor -->
+<!-- Agent settings -->
 <div class="overlay" id="agentModal">
-  <div class="card">
-    <h3 id="agentModalTitle">Edit agent</h3>
-    <p class="hint">You decide who answers what. Laya reads every agent's "When" rule and picks one for each message in #mix.</p>
+  <div class="card agent-card">
+    <div class="agent-head">
+      <h3 id="agentModalTitle">Agent settings</h3>
+      <div class="tabs" id="agentTabs">
+        <button type="button" data-tab="profile" class="active">Profile</button>
+        <button type="button" data-tab="personality">Personality</button>
+        <button type="button" data-tab="tools">Tools</button>
+        <button type="button" data-tab="memory">Memory</button>
+      </div>
+    </div>
     <div class="presets" id="presets"></div>
-    <div class="field"><label>Name</label><input id="fName" maxlength="40" placeholder="e.g. Research"></div>
+
+    <div class="tab-pane active" data-pane="profile">
+<div class="field"><label>Name</label><input id="fName" maxlength="40" placeholder="e.g. Research"></div>
     <div class="field">
       <label>Model</label>
       <button type="button" class="model-btn" id="modelBtn">
@@ -122,15 +126,23 @@
       <textarea id="fWhen" maxlength="500" placeholder="e.g. Questions about code, bugs, or technical design."></textarea>
       <small>The decider uses this to decide. Be specific so agents don't overlap.</small>
     </div>
-    <div class="field">
-      <label>How should it answer?</label>
-      <textarea id="fInstructions" maxlength="2000" placeholder="e.g. Answer in Thai. Show code first, then a short explanation."></textarea>
     </div>
+
+    <div class="tab-pane" data-pane="personality">
+      <p class="hint">Who this agent is. It is written to this agent's own <code>SOUL.md</code>, which OpenClaw reads at the start of every session.</p>
+      <div class="field">
+        <label>Personality & how it answers</label>
+        <textarea id="fInstructions" maxlength="2000" placeholder="e.g. Answer in Thai. Show code first, then a short explanation. Direct, a little dry."></textarea>
+      </div>
+      <div id="soulFiles" class="file-previews"></div>
+    </div>
+
+    <div class="tab-pane" data-pane="tools">
     <div class="field agent-tools-section">
       <div class="agent-tools-header">
-        <label>AI Capabilities & Permissions (เครื่องมือและความสามารถ)</label>
+        <label>Tools & permissions</label>
         <button type="button" class="chip-preset-btn" id="applyRolePresetBtn">
-          ✨ ปรับเครื่องมือแนะนำสำหรับ Agent นี้
+          ใช้ชุดที่แนะนำ
         </button>
       </div>
       <small class="agent-tools-hint">กำหนดว่า AI ตัวนี้ควรเข้าถึงเครื่องมืออะไรบ้าง เพื่อความปลอดภัยและความเชี่ยวชาญเฉพาะด้าน</small>
@@ -142,7 +154,6 @@
           <input type="checkbox" id="capWebSearch" class="cap-checkbox">
           <div class="cap-info">
             <div class="cap-title">
-              <span class="cap-icon">🌐</span>
               <span class="cap-name">Web Search (DuckDuckGo)</span>
               <span class="cap-badge rec">แนะนำ: ทุกตัว</span>
             </div>
@@ -155,7 +166,6 @@
           <input type="checkbox" id="capReadFile" class="cap-checkbox">
           <div class="cap-info">
             <div class="cap-title">
-              <span class="cap-icon">📖</span>
               <span class="cap-name">Read Project Files</span>
               <span class="cap-badge rec">Coder / Thinker</span>
             </div>
@@ -168,7 +178,6 @@
           <input type="checkbox" id="capWriteFile" class="cap-checkbox">
           <div class="cap-info">
             <div class="cap-title">
-              <span class="cap-icon">✏️</span>
               <span class="cap-name">Create & Edit Files</span>
               <span class="cap-badge coder">Coder / Writer</span>
             </div>
@@ -181,7 +190,6 @@
           <input type="checkbox" id="capBashExec" class="cap-checkbox">
           <div class="cap-info">
             <div class="cap-title">
-              <span class="cap-icon">💻</span>
               <span class="cap-name">Shell / Bash Execution</span>
               <span class="cap-badge danger">Coder เท่านั้น</span>
             </div>
@@ -193,12 +201,18 @@
       <!-- Advanced Connectors / MCP -->
       <div class="advanced-tools-row">
         <button class="btn subtle-btn" id="connectToolBtn" type="button">
-          🧩 เพิ่มเติม: เชื่อมต่อ MCP Connectors & Apps (Composio)
+          เชื่อมต่อ connector และแอปเพิ่ม
         </button>
       </div>
       <div id="toolRows" style="margin-top:6px"></div>
       <small id="toolsNote"></small>
     </div>
+    </div>
+
+    <div class="tab-pane" data-pane="memory">
+      <div id="memoryPane" class="file-previews"></div>
+    </div>
+
     <div class="form-error" id="agentError"></div>
     <div class="actions">
       <button class="btn danger" id="deleteAgentBtn">Delete</button>
@@ -265,7 +279,7 @@
           </div>
         </div>
         <button class="btn-preset-all" id="btnEnableAllRec" type="button">
-          ✨ เปิดปลั๊กอินแนะนำทั้งหมด
+          เปิดปลั๊กอินแนะนำทั้งหมด
         </button>
       </div>
 
@@ -294,19 +308,11 @@
       <div class="gw-status-box">
         <div class="gw-status-item">
           <span class="gw-status-label">OpenClaw Gateway</span>
-          <span class="gw-status-val" id="gwStatusOnline" style="color:#10b981">🟢 Online (59 Tools Active)</span>
+          <span class="gw-status-val" id="gwStatusOnline">Checking…</span>
         </div>
         <div class="gw-status-item">
-          <span class="gw-status-label">Laya Decider Router</span>
-          <span class="gw-status-val" style="color:#10b981">🟢 Online (Port 8790)</span>
-        </div>
-        <div class="gw-status-item">
-          <span class="gw-status-label">Colony Local Daemon</span>
-          <span class="gw-status-val" style="color:#10b981">🟢 Online (Port 8765)</span>
-        </div>
-        <div class="gw-status-item">
-          <span class="gw-status-label">Tool Execution Sandbox</span>
-          <span class="gw-status-val" style="color:#a78bfa">Full Sandbox Profile</span>
+          <span class="gw-status-label">Colony</span>
+          <span class="gw-status-val">Running</span>
         </div>
       </div>
       <div class="field">

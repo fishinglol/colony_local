@@ -56,6 +56,20 @@ def add_action(workspace_id: str, action: str) -> None:
                 actions.append(clean)
 
 
+def add_step(workspace_id: str, step: dict[str, Any]) -> None:
+    """Record one finished tool call (core/trace.py::describe) in the active turn. Ignored when no turn is running."""
+    with _LOCK:
+        curr = _ACTIVITIES.get(workspace_id)
+        if curr is not None:
+            curr.setdefault("steps", []).append({**step, "at": time.time()})
+
+
+def take_steps(workspace_id: str) -> list[dict[str, Any]]:
+    """The steps recorded so far in this workspace's running turn."""
+    with _LOCK:
+        return list((_ACTIVITIES.get(workspace_id) or {}).get("steps", []))
+
+
 def get_activity(workspace_id: str) -> dict[str, Any]:
     """Retrieve current real-time activity for a workspace."""
     with _LOCK:
@@ -69,6 +83,7 @@ def get_activity(workspace_id: str) -> dict[str, Any]:
                 "agent_name": None,
                 "model": None,
                 "actions": [],
+                "steps": [],
             }
         return dict(curr)
 

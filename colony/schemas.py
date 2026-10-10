@@ -39,4 +39,7 @@ class MessageResponse(BaseModel):
     confidence: float | None = None
     memory_saved: bool = False
     actions: list[str] = Field(default_factory=list)
+    steps: list[dict] = Field(default_factory=list)      # what the agent did: core/trace.py steps
+    worked_s: float | None = None                         # seconds the turn took
+    thinking: str | None = None                           # the model's reasoning text, when OpenClaw returns it
     created_at: datetime

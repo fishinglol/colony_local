@@ -5,7 +5,9 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..core.approvals import approvals
 from ..core.context import supports_tools
-from ..core.gate import decide
+from ..core.activity import add_step
+from ..core.gate import _find, decide
+from ..core.trace import describe
 
 router = APIRouter()
 
@@ -30,6 +32,24 @@ class GateCall(BaseModel):
 def gate(call: GateCall) -> dict:
     """Called by OpenClaw (colony-gate.ts) before each tool call. Blocks while the user is being asked."""
     return decide(get_settings(), call.agent_id, call.tool, call.params)
+
+
+class ToolResult(BaseModel):
+    agent_id: str
+    tool: str
+    params: dict = {}
+    result: object = None
+    error: str | None = None
+    duration_ms: int | None = None
+
+
+@router.post("/activity/tool")
+def tool_finished(call: ToolResult) -> dict:
+    """Called by OpenClaw (colony-gate, after each tool call): becomes a step under the agent's reply."""
+    found = _find(call.agent_id)
+    if found is not None:
+        add_step(found[0].id, describe(call.tool, call.params, call.result, call.error, call.duration_ms))
+    return {"status": "ok"}
 
 
 @router.post("/approvals/{approval_id}")

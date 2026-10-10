@@ -4,6 +4,7 @@ Single user. Everything is scoped to one workspace: its team of agents, its one 
 workspace id) and its memory folder (engine/openclaw.py::memory_dir).
 """
 import logging
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -43,6 +44,7 @@ def _notice(workspace_id: str, text: str, meta: dict, model: str = "none") -> Me
 
 def handle_message(request: MessageRequest) -> MessageResponse:
     """Main entry point — one request, one synchronous response. Every agent's turn runs in OpenClaw."""
+    started = time.monotonic()
     settings = get_settings()
     workspace = get_workspace(request.workspace_id)          # raises WorkspaceNotFound
     workspace_id = conversation_id = workspace.id
@@ -77,7 +79,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
 
     direct = next((r for r in roles if r.id == request.role_id), None)
 
-    from .activity import clear_activity, set_activity
+    from .activity import add_step, clear_activity, set_activity, take_steps
     set_activity(workspace_id, step="routing", detail="Routing intent (Nemotron-3-nano / Laya)...")
 
     decision = decide(message=text, roles=roles, settings=settings, direct_role=direct)
@@ -117,7 +119,12 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     actual_model = role.model
     openclaw_session = None
     memory_before = ""
+    thinking = ""
     if settings.mock_mode:
+        from .trace import describe       # a believable trace so the UI can be tried without a Gateway
+        for tool, params, out in (("exec", {"command": "ls -la"}, "total 8\n-rw-r--r--  README.md"), ("read", {"path": "README.md"}, "# Demo"),
+                                  ("memory_search", {"query": text[:40]}, "no results")):
+            add_step(workspace_id, describe(tool, params, out, None, 120))
         reply_text = f"[mock] {role.name} ({role.model}) — {text[:80]}" + (f" [+{len(refs)} file(s)]" if refs else "")
     elif not (settings.openclaw_gateway_enabled and openclaw.is_openclaw_available(settings)):
         return _notice(workspace_id, "⚠️ OpenClaw Gateway ยังไม่พร้อม — รอสักครู่หลังเปิด `colony` หรือตรวจสอบที่ Settings", meta)
@@ -142,8 +149,10 @@ def handle_message(request: MessageRequest) -> MessageResponse:
                 folder=folder,
             )
             reply_text = openclaw_res.reply
-            actual_model = openclaw_res.model
+            # the Gateway names the agent (openclaw/<id>); what a person wants to see is the model that answered
+            actual_model = role.model if openclaw_res.model.startswith("openclaw/") else openclaw_res.model
             actions = openclaw_res.actions
+            thinking = openclaw_res.thinking
             openclaw_session = openclaw_res.session_user
         except ProviderError as exc:
             logger.error("OpenClaw Gateway turn error: %s", exc)
@@ -157,6 +166,9 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     reply_text = strip_self_label(reply_text, role.name)
     memory_saved = bool(openclaw_session and openclaw.keep_if_asked(settings, workspace_id, text, memory_before))
     reply_text += _actions_line(actions)
+
+    steps, worked_s = take_steps(workspace_id), round(time.monotonic() - started, 1)
+    meta = {**meta, "steps": steps, "worked_s": worked_s, "thinking": thinking or None}
 
     # ── 5. Persist ────────────────────────────────────────────────────────────
     _, assistant_msg_id = append_exchange(

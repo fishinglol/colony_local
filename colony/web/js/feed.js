@@ -11,6 +11,7 @@ import { avatar } from './avatar.js';
 import { refreshContext } from './context.js';
 import { $, el, shortModel, timeOf, toast } from './dom.js';
 import { renderMarkdown } from './markdown.js';
+import { renderWork } from './work.js';
 import { currentWorkspace, state } from './state.js';
 
 const currentChannel = () => state.target || 'auto';
@@ -80,9 +81,9 @@ function addAgent(text, meta, iso, question, files = []) {
   head.append(el('span', 'msg-name', meta.role_name || 'AI'), el('span', 'msg-time', timeOf(iso)));
   if (meta.model && meta.model !== 'none') head.append(el('span', 'tag', shortModel(meta.model)));
   if (meta.decided_by === 'ollama') {
-    head.append(el('span', 'tag jev', `⚡ Nemotron ${Math.round((meta.confidence || 0) * 100)}%`));
+    head.append(el('span', 'tag', `Nemotron ${Math.round((meta.confidence || 0) * 100)}%`));
   } else if (meta.decided_by === 'laya') {
-    head.append(el('span', 'tag jev', `Laya ${Math.round((meta.confidence || 0) * 100)}%`));
+    head.append(el('span', 'tag', `Laya ${Math.round((meta.confidence || 0) * 100)}%`));
   }
   if (meta.decided_by === 'fallback') {
     const t = el('span', 'tag warn', 'Decider unavailable — default agent');
@@ -91,17 +92,8 @@ function addAgent(text, meta, iso, question, files = []) {
   if (meta.memory_saved) head.append(el('span', 'tag mem', 'Saved to memory'));
   const body = el('div', 'md'); body.innerHTML = renderMarkdown(text);
 
-  // Completed actions card if tools were executed
-  if (meta.actions && meta.actions.length > 0) {
-    const actCard = el('div', 'msg-actions-card');
-    actCard.appendChild(el('div', 'msg-actions-head', `🛠️ Executed actions (${meta.actions.length})`));
-    const list = el('div', 'msg-actions-list');
-    meta.actions.forEach((a) => {
-      list.appendChild(el('div', 'msg-action-pill', a));
-    });
-    actCard.appendChild(list);
-    body.appendChild(actCard);
-  }
+  const work = renderWork(meta.steps || [], { thinking: meta.thinking || '', workedS: meta.worked_s });
+  if (work) col.dataset.hasWork = '1';
 
   const actions = el('div', 'msg-actions'), copy = el('button', null, 'Copy');
   copy.onclick = async () => { await navigator.clipboard.writeText(text); toast('Copied'); };
@@ -111,7 +103,9 @@ function addAgent(text, meta, iso, question, files = []) {
     other.onclick = (e) => openAskMenu(e.currentTarget, question, meta.role_id, files);
     actions.appendChild(other);
   }
-  col.append(head, body, actions);
+  col.append(head);
+  if (work) col.appendChild(work);
+  col.append(body, actions);
   msg.append(avatar(role, true), col); inner.appendChild(msg); scrollDown();
 }
 
@@ -123,7 +117,7 @@ function addTyping(roleId) {
   const col = el('div', 'msg-col'), head = el('div', 'msg-head');
 
   let title = 'Deciding which agent answers…';
-  if (act.step === 'routing') title = '⚡ Routing intent (Nemotron-3-nano / Laya)…';
+  if (act.step === 'routing') title = 'Choosing who answers…';
   else if (agentName) title = `${agentName} is working…`;
 
   head.append(el('span', 'msg-name', title));
@@ -139,21 +133,9 @@ function addTyping(roleId) {
   statusRow.append(pulse, detail);
   liveCard.appendChild(statusRow);
 
-  if (act.command) {
-    const cmdRow = el('div', 'live-cmd-pill');
-    cmdRow.append(el('span', 'cmd-badge', 'COMMAND'), el('code', null, act.command));
-    liveCard.appendChild(cmdRow);
-  }
-
-  if (act.actions && act.actions.length > 0) {
-    const historyBox = el('div', 'live-actions-history');
-    act.actions.forEach((a) => {
-      historyBox.append(el('div', 'live-action-item', `✓ ${a}`));
-    });
-    liveCard.appendChild(historyBox);
-  }
-
+  const work = renderWork(act.steps || [], { live: true });
   col.append(head, dots, liveCard);
+  if (work) col.appendChild(work);
   msg.append(avatar(role, true), col);
   $('feedInner').appendChild(msg); scrollDown();
 }

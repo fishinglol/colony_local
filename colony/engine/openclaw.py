@@ -16,6 +16,7 @@ import os
 import shutil
 import threading
 import time
+from datetime import datetime
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ class OpenClawTurnResult:
     actions: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     session_user: str = ""      # the OpenClaw session this turn ran in (see mark_seen)
+    thinking: str = ""          # the model's reasoning text, when the Gateway returns it
 
 
 def resolve_agent_target(agent_id: str | None) -> str:
@@ -386,6 +388,38 @@ def remove_agents(settings: Settings, workspace_id: str) -> None:
         shutil.rmtree(folder, ignore_errors=True)
 
 
+GATEWAY_LOG = Path.home() / ".colony" / "openclaw.log"      # where `colony` sends the Gateway's output (cli.py)
+_PREPARING = ("startup preparation still running", "remains degraded", "Sessions remain unavailable")
+
+
+def gateway_prepared(settings: Settings, log: Path | None = None, now: float | None = None) -> bool:
+    """Is the Gateway done preparing its agents' databases? /readyz turns 200 well before that (about a minute after start; the
+    preparation takes a few minutes), and until then every run fails with HTTP 500 and a config change can send the Gateway into a
+    restart. It repeats a "still running"/"degraded" line about once a minute while it works, so: no such line in the last 75 s."""
+    try:
+        lines = (log or GATEWAY_LOG).read_text(encoding="utf-8", errors="replace").splitlines()[-400:]
+    except OSError:
+        return True         # a Gateway not started by Colony: nothing to look at
+    now = time.time() if now is None else now
+    for line in reversed(lines):
+        if any(mark in line for mark in _PREPARING):
+            try:
+                return now - datetime.fromisoformat(line[:29]).timestamp() > 75
+            except ValueError:
+                return False
+    return True
+
+
+def wait_prepared(settings: Settings, timeout: float = 480.0) -> bool:
+    """Wait (up to `timeout` seconds) until gateway_prepared(); False if it never was."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if gateway_prepared(settings):
+            return True
+        time.sleep(5)
+    return False
+
+
 def _gateway_restarted(settings: Settings, wait: float = 200.0) -> bool:
     """After a failed call: did the Gateway restart itself? (OpenClaw does after a config reload it cannot apply live, e.g. while a
     new agent's database is still being prepared.) If it went down, wait for it to come back and say True; if it stayed up, False."""
@@ -421,7 +455,8 @@ def _gateway_post(settings: Settings, payload: dict, model: str | None, timeout:
     except urllib.error.HTTPError as exc:
         err_msg = exc.read().decode("utf-8", errors="replace")
         logger.error("OpenClaw Gateway HTTP %s: %s", exc.code, err_msg)
-        if _retry and exc.code >= 500 and _gateway_restarted(settings):
+        unprepared = "remain unavailable" in err_msg or "preparation" in err_msg      # the Gateway is still preparing its agents
+        if _retry and exc.code >= 500 and ((unprepared and wait_prepared(settings)) or _gateway_restarted(settings)):
             return _gateway_post(settings, payload, model, timeout, path, _retry=False)
         raise ProviderError(f"OpenClaw Gateway request failed ({exc.code}): {err_msg[:200]}",
                             status=exc.code, provider_message=err_msg) from exc
@@ -472,6 +507,7 @@ def _as_responses(payload: dict, pdfs: list[dict]) -> dict:
 
 def ping_model(settings: Settings, model: str) -> tuple[str, float]:
     """One tiny message to `model` through a lean OpenClaw agent: (start of the reply, seconds). For "Test this model"."""
+    wait_prepared(settings)
     ensure_agent(settings, "colony-ping", "Model test")
     started = time.monotonic()
     data = _gateway_post(settings, {"model": "openclaw/colony-ping", "stream": False, "user": "ome-ping",
@@ -534,6 +570,10 @@ def run_openclaw_turn(
     agent_id = agent_id_for(workspace_id, role_id)
     connectors = connectors if getattr(tools, "mcp", "off") != "off" else []
     memory = memory_dir(settings, workspace_id)
+    if not gateway_prepared(settings):
+        set_activity(workspace_id, step="preparing", agent_name=role_name, model=role_model,
+                     detail="OpenClaw is still preparing its agents (after a start this takes a few minutes)…")
+        wait_prepared(settings)
     ensure_agent(settings, agent_id, role_name, tools=tools, web_search=web_search, connectors=connectors,
                  folder=str(folder) if folder else None, memory=memory)
     model = f"openclaw/{agent_id}"
@@ -633,7 +673,9 @@ def run_openclaw_turn(
             if isinstance(n, str) and n not in actions:
                 actions.append(n)
 
+    thinking = msg.get("reasoning_content") or msg.get("reasoning") or ""
     return OpenClawTurnResult(
+        thinking=thinking if isinstance(thinking, str) else "",
         reply=reply_text,
         model=actual_model,
         actions=actions,

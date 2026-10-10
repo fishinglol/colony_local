@@ -1,5 +1,5 @@
 // Entry point: wire the page's buttons to the modules, then load the initial data.
-import { deleteAgent, getModelField as getPickedModel, openAgentModal, openTools, saveAgent, setModel, testModel } from './agent-editor.js';
+import { deleteAgent, getModelField as getPickedModel, openAgentModal, openTools, saveAgent, setModel, showAgentTab, testModel } from './agent-editor.js';
 import { initAttachments } from './attachments.js';
 import { initLinks } from './links.js';
 import { initToolPicker, openConnectors } from './tool-picker.js';
@@ -21,6 +21,7 @@ $('deleteWorkspaceBtn').onclick = deleteWorkspace;
 $('addAgentBtn').onclick = () => openAgentModal('');
 $('editAgentBtn').onclick = () => openAgentModal(state.target);
 $('saveAgentBtn').onclick = saveAgent;
+document.querySelectorAll('#agentTabs button').forEach((b) => { b.onclick = () => showAgentTab(b.dataset.tab); });
 $('modelBtn').onclick = () => openModelPicker(setModel, getPickedModel());
 $('connectToolBtn').onclick = () => openTools();
 $('testModelBtn').onclick = testModel;
@@ -40,7 +41,10 @@ document.querySelectorAll('.overlay').forEach((o) => { o.addEventListener('click
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach((o) => closeModal(o.id)); });
 document.addEventListener('click', (e) => { if (!e.target.closest('.menu') && !e.target.closest('.msg-actions') && !e.target.closest('.ws-switch') && !e.target.closest('.reasoning-pill') && !e.target.closest('#modeBtn') && !e.target.closest('#folderBtn') && !e.target.closest('#addBtn')) closeMenu(); });
 
+import { hydrateIcons } from './icons.js';
+
 (async function init() {
+  hydrateIcons();
   initContext();
   initMode();
   initLinks();

@@ -420,3 +420,30 @@ def test_gateway_restarted_means_it_went_down_and_came_back(monkeypatch):
     assert openclaw._gateway_restarted(settings) is True
     monkeypatch.setattr(openclaw, "is_openclaw_available", lambda s=None: True)            # never went down
     assert openclaw._gateway_restarted(settings) is False
+
+
+def test_gateway_is_prepared_when_its_log_has_no_recent_preparing_line(tmp_path):
+    from datetime import datetime
+    settings = Settings()
+    log = tmp_path / "gateway.log"
+    stamp = "2026-10-10T13:23:36.124+08:00"
+    at = datetime.fromisoformat(stamp).timestamp()
+    log.write_text(f"{stamp} [state/agent-admission] agent database startup preparation still running agentId=main phase=models\n")
+    assert openclaw.gateway_prepared(settings, log, now=at + 30) is False           # still working
+    assert openclaw.gateway_prepared(settings, log, now=at + 100) is True           # quiet for more than a minute
+    log.write_text("2026-10-10T13:00:00.000+08:00 [gateway] ready\n")
+    assert openclaw.gateway_prepared(settings, log, now=at) is True
+    assert openclaw.gateway_prepared(settings, tmp_path / "missing.log") is True    # a Gateway Colony did not start
+
+
+def test_a_turn_waits_for_the_gateway_to_finish_preparing(monkeypatch, tmp_path):
+    settings = Settings(data_dir=tmp_path)
+    states = iter([False, True])
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda s, log=None, now=None: next(states))
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    monkeypatch.setattr(openclaw, "_gateway_post", lambda *a, **k: {"choices": [{"message": {"content": "ok"}}]})
+    waited = []
+    monkeypatch.setattr(openclaw, "wait_prepared", lambda s, timeout=480.0: waited.append(timeout) or True)
+    res = openclaw.run_openclaw_turn(settings=settings, role_id="c", role_name="C", role_model="ollama/x", role_instructions="",
+                                     workspace_id="ws_1", channel="auto", user_message="hi")
+    assert res.reply == "ok" and len(waited) == 1

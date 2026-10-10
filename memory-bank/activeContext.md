@@ -1,6 +1,23 @@
 # Active Context — Colony Local
 _Last updated: 2026-10-09 (direction change to OpenClaw-first recorded; before it: OpenClaw Gateway + Plugin Manager + Agent Capabilities + Ollama system prompt pairing complete)_
 
+## ✅ UI redesign + work trace + agent settings (2026-10-10, fifth pass)
+- **Minimal theme** (`web/app.css` tail + token edits, `js/icons.js`, `js/avatar.js`): flat neutral palette, no gradients/violet/emoji, one stroke
+  icon set (`data-icon` hydrated in main.js), neutral initials avatars, no sidebar "reasoning" pills.
+- **"Worked for 17s" under a reply** (`js/work.js`): collapsible list of steps (command with `$ cmd` + output, Read path#Lx-y, Wrote/Edited,
+  Searched memory/web, Used <connector>) like the owner's reference screenshots; live while the agent works. Data path: OpenClaw
+  `after_tool_call` hook (colony-gate/index.ts) -> `POST /api/activity/tool` -> `core/trace.describe` -> `activity.add_step`; `chat.py`
+  attaches `steps`, `worked_s`, `thinking` (only if the Gateway returns `reasoning_content`) to the reply and the stored message metadata.
+  Verified live: `ls -la .` with its output, a failed `read` and the retry, "Worked for 31s".
+- **Agent settings window** (tabs Profile / Personality / Tools / Memory): Personality edits the SOUL.md text and previews SOUL.md, IDENTITY.md,
+  AGENTS.md; Memory shows shared USER.md, MEMORY.md, daily notes, this agent's own MEMORY.md and DREAMS.md. `GET /api/roles/{id}/files`.
+- **Gateway readiness (found while testing)**: `/readyz` = 200 about a minute after start, but the agents' databases need several more minutes;
+  until then runs fail with HTTP 500 "Sessions remain unavailable" and a config write (adding an agent) can make the Gateway restart itself
+  ("hot reload recovery: cron monitor") and even wedge. `engine/openclaw.gateway_prepared` reads `~/.colony/openclaw.log` (no
+  "still running/degraded/Sessions remain unavailable" line in the last 75 s); a turn waits for it (`wait_prepared`, activity "preparing") and a
+  500 with those words is retried once. Not fixed in OpenClaw itself.
+- Reply model tag now shows the role's model, not `openclaw/<agent id>`. 134 tests pass.
+
 ## ✅ SOUL.md per agent (2026-10-10, fourth pass; replaces the shared-SOUL.md note above)
 Owner: "each AI's identity differs, SOUL.md must be one per agent". Now each agent has its OWN OpenClaw workspace
 `~/.colony/openclaw-agents/<agent_id>/` with AGENTS.md (memory rules), SOUL.md (only its persona), IDENTITY.md (its name), a USER.md COPY

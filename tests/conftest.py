@@ -12,6 +12,7 @@ def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(tmp_path / "openclaw.json"))   # never the real ~/.openclaw
     from colony.engine import openclaw
     openclaw._known_agents.clear()
+    monkeypatch.setattr(openclaw, "GATEWAY_LOG", tmp_path / "no-gateway.log")       # never the real Gateway's log
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

@@ -1,4 +1,4 @@
-// The "Add / Edit agent" modal: presets, model dropdown, save and delete.
+// The agent settings window: profile, personality (SOUL.md), tools, memory; save and delete.
 import { api } from './api.js';
 import { roleColor } from './avatar.js';
 import { ensureModels, findModel } from './model-picker.js';
@@ -12,23 +12,23 @@ import { currentWorkspace, state } from './state.js';
 
 // Starting points for "Add agent". Everything is editable after picking one.
 const PRESETS = [
-  { name: 'Research', model: 'perplexity/sonar',
+  { name: 'Research', model: 'ollama/gpt-oss:120b',
     when: 'Looking things up, current events, fact-finding, comparing sources, market or competitor research.',
     instructions: 'Search the web. Cite your sources with links. Separate facts from your own opinion. End with a short summary.' },
-  { name: 'Presentation', model: 'qwen/qwen3.8-27b:free',
+  { name: 'Presentation', model: 'ollama/nemotron-3-super',
     when: 'Making slide decks, presentations, pitches, or talk outlines.',
     instructions: 'Reply as a slide-by-slide outline: slide title, 3–5 short bullets, then speaker notes. Keep each bullet under 12 words.' },
-  { name: 'Coder', model: 'z-ai/glm-5.2:free',
+  { name: 'Coder', model: 'ollama/gpt-oss:120b',
     when: 'Writing, debugging or explaining code, technical design, math.',
     instructions: 'Show the code first, then a short explanation. Point out edge cases.' },
-  { name: 'Writer', model: 'nvidia/nemotron-3-super-120b-a12b:free',
+  { name: 'Writer', model: 'ollama/gemma4:31b',
     when: 'Writing, editing, summarizing, translating, drafting emails or documents.',
     instructions: 'Write clearly and match the tone the user asks for.' },
-  { name: 'Chitchat', model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+  { name: 'Chitchat', model: 'ollama/nemotron-3-nano:30b',
     when: 'Casual conversation, greetings, opinions, quick factual questions.',
     instructions: 'Be friendly and brief.' },
 ];
-const DEFAULT_MODEL = 'qwen/qwen3.8-27b:free';
+const DEFAULT_MODEL = 'ollama/nemotron-3-super';
 
 // The model is chosen in the picker window (model-picker.js); this keeps the chosen id and the button that shows it.
 let pickedModel = DEFAULT_MODEL;
@@ -242,10 +242,49 @@ function fillAgentForm(r) {
   loadServers().then(renderToolRows);      // an agent with "every connector" needs the connector list to show its rows
 }
 
+// Tabs of the agent settings window.
+export function showAgentTab(name) {
+  document.querySelectorAll('#agentTabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('#agentModal .tab-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === name));
+}
+
+function filePreview(title, text, hint) {
+  const box = el('details', 'file');
+  const sum = el('summary'); sum.append(el('span', 'file-title', title), el('span', 'file-hint', hint || ''));
+  box.append(sum, el('pre', 'file-text', text || 'Empty yet.'));
+  return box;
+}
+
+// What OpenClaw actually has for this agent: its soul/identity/rules, and the memory it shares with the team.
+async function loadAgentFiles(id) {
+  const soul = $('soulFiles'), mem = $('memoryPane');
+  soul.innerHTML = mem.innerHTML = '';
+  if (!id) {
+    soul.appendChild(el('p', 'hint', 'The files appear after this agent is saved and has answered once.'));
+    mem.appendChild(el('p', 'hint', 'Memory appears after this agent is saved.'));
+    return;
+  }
+  let f;
+  try { f = await api(`/roles/${encodeURIComponent(id)}/files?workspace_id=${encodeURIComponent(state.workspaceId)}`); }
+  catch (err) { soul.appendChild(el('p', 'hint', `Could not load the files (${err.message}).`)); return; }
+  if (!f.started) soul.appendChild(el('p', 'hint', 'This is a preview: the files are written when the agent answers for the first time.'));
+  soul.append(filePreview('SOUL.md', f.soul, 'who it is'), filePreview('IDENTITY.md', f.identity, 'its name'), filePreview('AGENTS.md', f.rules, 'how memory works'));
+  mem.append(
+    el('p', 'hint', 'The whole team shares USER.md, MEMORY.md and the daily notes. Notes OpenClaw promotes while dreaming stay with this agent.'),
+    filePreview('USER.md', f.user, 'what the team knows about you'),
+    filePreview('MEMORY.md', f.memory, 'lasting facts, shared'),
+    filePreview('Daily notes', f.daily.map((d) => `# ${d.date}\n${d.content}`).join('\n\n'), 'shared, newest first'),
+    filePreview('This agent’s own MEMORY.md', f.private_memory, 'promoted by dreaming'),
+    filePreview('DREAMS.md', f.dreams, 'what dreaming consolidated'),
+  );
+}
+
 export function openAgentModal(id) {
   state.editingId = id;
+  showAgentTab('profile');
+  loadAgentFiles(id);
   const r = state.roles.find((x) => x.id === id) || { name: '', model: DEFAULT_MODEL, when: '', instructions: '' };
-  $('agentModalTitle').textContent = id ? `Edit ${r.name}` : 'Add agent';
+  $('agentModalTitle').textContent = id ? r.name : 'New agent';
   bindCapabilityEvents();
 
   const presets = $('presets'); presets.innerHTML = '';

@@ -8,7 +8,7 @@ from ..core.context import supports_tools
 from ..core.errors import explain
 from ..core.models import MODEL_POOL
 from ..core.workspaces import WorkspaceNotFound, get_workspace, save_roles
-from ..engine.openclaw import ping_model
+from ..engine.openclaw import agent_dir, agent_id_for, identity_md, memory_dir, ping_model, soul_md
 from ..llm.http import ProviderError
 from ..llm.ollama import OLLAMA_CLOUD_MODELS, normalize_ollama_model_id
 
@@ -43,6 +43,38 @@ def put_roles(payload: RolesPayload, workspace_id: str | None = None) -> RolesPa
         return RolesPayload(roles=save_roles(workspace.id, payload.roles))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _read(path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+@router.get("/roles/{role_id}/files")
+def get_role_files(role_id: str, workspace_id: str | None = None) -> dict:
+    """What an agent is, as the files OpenClaw reads for it: soul (persona), identity, its own memory and the team's shared memory."""
+    workspace = _workspace(workspace_id)
+    role = next((r for r in workspace.roles if r.id == role_id), None)
+    if role is None:
+        raise HTTPException(status_code=404, detail="That agent doesn't exist.")
+    settings = get_settings()
+    mine, shared = agent_dir(settings, agent_id_for(workspace.id, role.id)), memory_dir(settings, workspace.id)
+    daily = sorted((shared / "memory").glob("*.md"), reverse=True)[:7]
+    return {
+        "role_id": role.id, "name": role.name,
+        "soul": _read(mine / "SOUL.md") or soul_md(role.name, role.instructions).strip(),     # not written until its first turn
+        "identity": _read(mine / "IDENTITY.md") or identity_md(role.name).strip(),
+        "rules": _read(mine / "AGENTS.md"),
+        "user": _read(shared / "USER.md"),
+        "memory": _read(shared / "MEMORY.md"),
+        "private_memory": _read(mine / "MEMORY.md"),
+        "dreams": _read(mine / "DREAMS.md"),
+        "daily": [{"date": p.stem, "content": _read(p)} for p in daily],
+        "paths": {"agent": str(mine), "shared": str(shared)},
+        "started": mine.exists(),
+    }
 
 
 @router.get("/models")

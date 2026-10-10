@@ -42,8 +42,8 @@ export function openWorkspaceMenu(anchor) {
     b.onclick = () => { closeMenu(); openWorkspace(w.id); };
     menu.appendChild(b);
   });
-  const add = el('button', 'menu-action', '＋ New workspace'); add.onclick = () => { closeMenu(); openWorkspaceModal(false); };
-  const edit = el('button', 'menu-action', '⚙ Workspace settings'); edit.onclick = () => { closeMenu(); openWorkspaceModal(true); };
+  const add = el('button', 'menu-action', 'New workspace'); add.onclick = () => { closeMenu(); openWorkspaceModal(false); };
+  const edit = el('button', 'menu-action', 'Workspace settings'); edit.onclick = () => { closeMenu(); openWorkspaceModal(true); };
   menu.append(add, edit);
   document.body.appendChild(menu);
   const box = anchor.getBoundingClientRect();
@@ -73,7 +73,7 @@ export function openFolderMenu(anchor) {
     });
   };
   draw(); search.oninput = draw; menu.appendChild(list);
-  const create = el('button', 'menu-action', '＋ New project');
+  const create = el('button', 'menu-action', 'New project');
   create.onclick = () => { closeMenu(); openProjectModal(); };
   menu.appendChild(create);
   const choose = el('button', 'menu-action', '▣ Add folder');

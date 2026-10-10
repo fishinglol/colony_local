@@ -4,9 +4,9 @@
 import { api } from './api.js';
 import { renderNote } from './attachments.js';
 import { avatar } from './avatar.js';
+import { icon } from './icons.js';
 import { renderContext } from './context.js';
 import { openAgentModal } from './agent-editor.js';
-import { LABELS, effectiveReasoning, openReasoningMenu, reasoningOptions } from './reasoning.js';
 import { $, describeTools, el, shortModel } from './dom.js';
 import { renderFeed } from './feed.js';
 import { renderMode } from './mode.js';
@@ -20,14 +20,8 @@ export function renderSidebar() {
     const row = el('button', 'row' + (state.target === r.id ? ' active' : ''));
     const stack = el('span', 'stack');
     stack.append(el('span', 'name', r.name), el('span', 'sub', shortModel(r.model)));
-    if (reasoningOptions(r.model).length) {    // the model can reason: a level picker right on the row
-      const pill = el('span', 'reasoning-pill'); pill.title = `How hard ${r.name} thinks. Click to change.`;
-      pill.append(el('span', 'k', 'Reasoning'), el('span', 'v', LABELS[effectiveReasoning(r)]), el('span', 'caret', '▾'));
-      pill.onclick = (e) => { e.stopPropagation(); openReasoningMenu(pill, r); };
-      stack.appendChild(pill);
-    }
     row.append(avatar(r), stack);
-    const edit = el('span', 'edit', '✎'); edit.title = 'Edit agent';
+    const edit = el('span', 'edit'); edit.innerHTML = icon('settings', 14); edit.title = 'Agent settings';
     edit.onclick = (e) => { e.stopPropagation(); openAgentModal(r.id); };
     row.append(edit);
     row.onclick = () => selectTarget(r.id);
@@ -56,9 +50,9 @@ function renderHeader() {
     $('composerHint').textContent = `Talking to ${role.name} directly. Other agents still see this chat.`;
     $('editAgentBtn').style.display = '';
   } else {
-    $('barTitle').textContent = '# mix';
-    $('barSub').textContent = `Laya picks who answers · ${state.roles.map((r) => r.name).join(', ')}`;
-    $('prompt').placeholder = 'Message #mix — Laya picks the right agent…';
+    $('barTitle').textContent = 'All agents';
+    $('barSub').textContent = `${state.roles.map((r) => r.name).join(' · ')}`;
+    $('prompt').placeholder = 'Message the team — the right agent answers…';
     $('composerHint').textContent = 'Every agent in this workspace shares one conversation and its memory, so you never repeat yourself.';
     $('editAgentBtn').style.display = 'none';
   }

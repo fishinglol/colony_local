@@ -24,20 +24,20 @@ export async function checkOpenClawGateway() {
     const status = await api('/openclaw/status');
     if (status.available) {
       dot.className = 'openclaw-dot online';
-      label.textContent = 'OpenClaw Gateway 🟢';
+      label.textContent = 'OpenClaw';
       pill.title = `OpenClaw Gateway Connected (${status.url})`;
-      if ($('gwStatusOnline')) $('gwStatusOnline').textContent = '🟢 Online (59 Tools Active)';
+      if ($('gwStatusOnline')) $('gwStatusOnline').textContent = 'Online';
     } else {
       dot.className = 'openclaw-dot offline';
-      label.textContent = 'OpenClaw Gateway 🔴';
+      label.textContent = 'OpenClaw offline';
       pill.title = `OpenClaw Gateway Offline (${status.url}). Run 'pnpm openclaw gateway' in Terminal.`;
-      if ($('gwStatusOnline')) $('gwStatusOnline').textContent = '🔴 Offline';
+      if ($('gwStatusOnline')) $('gwStatusOnline').textContent = 'Offline';
     }
   } catch {
     dot.className = 'openclaw-dot offline';
-    label.textContent = 'OpenClaw Gateway 🔴';
+    label.textContent = 'OpenClaw offline';
     pill.title = 'OpenClaw Gateway Offline';
-    if ($('gwStatusOnline')) $('gwStatusOnline').textContent = '🔴 Offline';
+    if ($('gwStatusOnline')) $('gwStatusOnline').textContent = 'Offline';
   }
 }
 
@@ -120,7 +120,7 @@ function renderPluginCategories(categories, plugins, container) {
             body: JSON.stringify({ plugin_id: plugin.id, enabled: nextState }),
           });
           plugin.enabled = nextState;
-          toast(`${plugin.name}: ${nextState ? 'เปิดแล้ว 🟢' : 'ปิดแล้ว'}`);
+          toast(`${plugin.name}: ${nextState ? 'เปิดแล้ว' : 'ปิดแล้ว'}`);
           checkOpenClawGateway();
           const activeCount = cachedPlugins.filter((p) => p.enabled).length;
           $('pluginsCountBadge').textContent = `${activeCount} / ${cachedPlugins.length} ปลั๊กอินเปิดใช้งานอยู่`;

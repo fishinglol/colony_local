@@ -10,8 +10,10 @@ from pathlib import Path
 from ..config import Settings
 from ..engine.openclaw import agent_id_for, memory_dir
 from .agents import Role, apply_mode
+from .activity import set_activity
 from .approvals import approvals
 from .project_folder import project_folder
+from .trace import describe as trace_step
 from .workspaces import Workspace, list_workspaces
 
 SHOWN = 600     # characters of file content / command shown in an approval question
@@ -67,6 +69,16 @@ def _no(reason: str) -> dict:
 
 def decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
     """{"allow": bool, "reason": str}. May block while the user decides."""
+    verdict = _decide(settings, agent_id, tool, params)
+    found = _find(agent_id)
+    if verdict["allow"] and found:      # the live status line: what the agent is doing right now
+        step = trace_step(tool, params)
+        set_activity(found[0].id, step="tool", detail=f"{step['title']}: {step['detail']}"[:160], command=step["detail"][:160] or None,
+                     agent_name=found[1].name)
+    return verdict
+
+
+def _decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
     found = _find(agent_id)
     if found is None:
         return _no("Colony does not know this agent.")
