@@ -1,102 +1,42 @@
 # Tech Context — Colony Local
-> **2026-10-09:** Backend runtime is moving to **OpenClaw run from source** (`openclaw-main 2/`, Node, package `openclaw`
-> v2026.9.8) with Colony as the UI. Colony is started by `colony.cli`; the target is for it to also start/stop the OpenClaw
-> Gateway (`:18789`). Python deps stay at 5 (fastapi, uvicorn, pydantic, pydantic-settings, certifi). New prerequisite: Node +
-> a working install/build of `openclaw-main 2` (gitignored, v2026.9.8, already built with `dist/`; start: `node openclaw.mjs gateway run --allow-unconfigured`; readiness: `/readyz`) (its `node_modules` looked incomplete on 2026-10-09; unverified). Pi/`pi-runtime`
-> goes away.
-
-All commands run from the repo root `~/Desktop/Colony-Local` (there is no `local/` folder any more).
+_Stack, config, how to run and test. All commands from repo root. Updated 2026-10-12._
 
 ## Stack
-- **Backend:** Python (venv at `.venv`, currently 3.14.6; `requires-python >=3.10`),
-  FastAPI ≥0.115, uvicorn[standard], pydantic ≥2 + pydantic-settings, certifi.
-  Dev: pytest, httpx. **No other runtime dependencies** (HTTP is stdlib `urllib`).
-- **UI:** plain HTML/CSS + ES-module JS served by the same FastAPI app (same
-  origin → no CORS, deliberately). No bundler, no framework, no npm for the UI.
-- **Native window:** Tauri 2 (Rust 1.98, `tauri` crate 2.11.x, npm `@tauri-apps/cli` ^2,
-  Node 24; `tauri-plugin-dialog` for the folder picker).
-- **Tool engine:** OpenClaw Gateway (`openclaw gateway run --allow-unconfigured` on port 18789; Node 24, pnpm)
-  and legacy Pi `@earendil-works/pi-coding-agent` **0.87.1** in `pi-runtime/`.
-- **Models:** OpenClaw local models (via Ollama on port 11434: `ollama/nemotron-3-super`, `ollama/nemotron-3-nano`, `ollama/gemma4`, `ollama/qwen3.5`),
-  OpenRouter (when key provided), **or the owner's Kaggle GPU** (`kaggle/<name>`).
-- **Decider:** Laya (`laya[serve]==0.3.21`, Apache-2.0, mmBERT "multilingual" checkpoint ~322M) running on port 8790.
-- **Multi-daemon Local Topology:**
-  1. `ollama serve` (port 11434) — Local model inference backend.
-  2. `laya-runtime/serve.py` (port 8790) — Local intent routing.
-  3. `colony.cli` (port 8765) — Multi-agent orchestrator & Web UI.
-  4. `openclaw gateway` (port 18789) — Core agent runner, tool executor & plugin host.
+- **Backend:** Python 3.14 in `.venv` (`requires-python >=3.10`), FastAPI, uvicorn, pydantic(+settings), certifi. HTTP is stdlib `urllib`. Dev: pytest, httpx. **No other deps.**
+- **UI:** plain HTML/CSS/ES modules, no bundler. **Tauri 2** window in `desktop/`. **Coucou** Swift app in `coco_local/` (XcodeGen, macOS 13+).
+- **Engine:** OpenClaw Gateway from source (`openclaw-main 2/`, Node 24.16, `node openclaw.mjs gateway run --allow-unconfigured`), started by `colony.cli`.
+- **Models:** Ollama (cloud or local, :11434) through OpenClaw: nemotron-3-nano:30b, nemotron-3-super, nemotron-3-ultra, gemma4:31b, gpt-oss:20b/120b.
+- **Decider:** Jev API (api.beatapi.io) → Laya (`laya-runtime/`, optional) → Nemotron/Ollama.
 
-## How to run / verify
-```bash
-# once
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-(cd pi-runtime && npm install)                # only needed for agents with tools
-(cd desktop && npm install)                   # only needed for the native window
-~/.pyenv/versions/3.11.13/bin/python -m venv laya-runtime/.venv \
-  && laya-runtime/.venv/bin/pip install -r laya-runtime/requirements.txt   # local decider (optional)
-
-# run
-.venv/bin/colony                              # server + Laya + opens the browser
-.venv/bin/colony --reload --no-open           # dev: restart on code change
-(cd desktop && npm run dev)                   # native window (first Rust compile ~7 min; the script is `dev`)
-
-# test
-.venv/bin/python -m pytest -q                 # 187 tests, ~50 s (real-Pi tests skip if pi-runtime missing)
-(cd desktop/src-tauri && cargo check)         # Rust compiles
-```
-- Kaggle side: see activeContext "How the owner runs it" (Save & Run All with GPU → Logs → URL → Settings).
-- CLI flags: `--port` (default 8765) `--host` `--no-open` `--reload` `--exit-with-parent` (desktop shell only).
-- **Testing against the real stack without touching the owner's data:** start Colony with a throwaway HOME, e.g.
-  `HOME=<scratch>/home HF_HOME=~/.cache/huggingface OPENROUTER_API_KEY= .venv/bin/colony --no-open --port 8769`
-  (HF_HOME keeps Laya from re-downloading), then drive `/api/settings`, `/api/roles`, `/api/messages` with curl/python.
-  This is how the 2026-09-29 Kaggle run was verified. Kill it with `pkill -f "colony --no-open --port 8769"` (Laya follows).
-- **Tools path with no API key:** run `tests/fake_llm.py`'s server on a fixed port, start colony with
-  `HOME=<throwaway> OPENROUTER_API_KEY=sk-fake OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 .venv/bin/colony --no-open --port 8767`,
-  send `WRITE hello.txt hi` to a tools-enabled agent (custom id like `acme/fake-a`).
-- `.claude/launch.json` (untracked, per machine) may hold preview configs `colony-local-mock` (8766) / `colony-local-tools`
-  (8767) with scratchpad HOMEs — recreate when needed. Hard refresh (Cmd+Shift+R) once after UI changes.
-
-## Configuration (`colony/config.py`, env or `~/.colony/.env`)
-| Setting (env) | Default | Notes |
+## Processes / ports
+| Port | Process | Notes |
 |---|---|---|
-| `OPENROUTER_API_KEY` | none | set in the Settings modal, never in chat/code (owner's balance is negative now) |
-| `KAGGLE_BASE_URL` | none | Settings modal; the notebook's tunnel URL + `/v1`; changes every run |
-| `KAGGLE_CONTEXT_WINDOW` | 16384 | must equal the notebook's `CONTEXT` / OLLAMA_CONTEXT_LENGTH |
-| `LAYA_URL` | set by `colony` when `laya-runtime/.venv` exists | local decider instead of Jev |
-| `OPENROUTER_ROUTING_MODEL` | `deepseek/deepseek-v4.1-flash` | memory review + compaction; a `kaggle/…` id sends them to Kaggle |
-| `WORKSPACE_DIR` | none | legacy: only read once to give the first workspace its project folder |
-| `PI_BIN` | none → `pi-runtime/node_modules/.bin/pi` → PATH | |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | used by Pi only; tests point it at a fake |
-| `TOOLS_TURN_TIMEOUT_SECONDS` / `APPROVAL_TIMEOUT_SECONDS` | 600 / 120 | |
-| `CHAT_RETRIES` | 3 | plain chat only |
-| `MAX_ATTACHMENT_MB` | 20 | per attached file |
-| `COMPACTION_ENABLED` / `COMPACT_AT_TOKENS` / `COMPACT_KEEP_TOKENS` | true / 24000 / 8000 | summarise the old part of a long conversation |
-| `HISTORY_MAX_MESSAGES` / `MAX_OUTPUT_TOKENS` | 60 / 4096 | |
-| `JEV_MODEL` / `JEV_DECISIONS_URL` | `typesafe/jev-1.13` / alpha decisions URL | |
-| `MOCK_MODE` | false | skips real LLM calls (tests, UI dev) |
-| `DATA_DIR` | `~/.colony` | |
-| `HOST` / `PORT` | 127.0.0.1 / 8765 | Laya uses 8790 (fixed, `cli.LAYA_PORT`) |
-| `SELF_IMPROVE_ENABLED` / `SELF_IMPROVE_INTERVAL_TURNS` | true / 5 | memory review |
+| 8765 | `colony.cli` (FastAPI + web UI) | `--no-open --reload --port --host` |
+| 18789 | OpenClaw Gateway | started by Colony; `/readyz` 200 ≈ 1 min, agent DBs minutes later; log `~/.colony/openclaw.log` |
+| 8790 | Laya | only when no `JEV_API_KEY`; `/health`; log `~/.colony/laya.log`; ~1.5 GB RAM |
+| 11434 | Ollama | local models / embeddings if ever needed |
 
-## HTTP API (`/api`)
-`GET|PUT /mcp` (connectors, secrets masked), `POST /mcp/composio` (`{key}`), `POST /open-url` (`{url}`) · `POST /workspaces/{id}/attachments` (`{name, data: base64}` → `{id, name, kind, mime, size}`), `GET /workspaces/{id}/attachments/{aid}` · `PATCH /workspaces/{id}` also takes `mode` and `folder` ·
-`GET /health` (incl. `tools: {pi_installed}`) ·
-`POST /messages` (`{message?, attachments? (ids), workspace_id?, role_id?, channel?}`; blocks until the
-reply, including any approval waits; response has `decided_by`, `confidence`, `role_name`, `model`) · `GET|POST /workspaces`, `PATCH|DELETE /workspaces/{id}`,
-`GET /workspaces/{id}/messages` (also returns `compaction`) · `GET /context?workspace_id=` · `GET|PUT /roles?workspace_id=` · `GET /models` (Kaggle models first, then catalog models + capabilities, `catalog` flag) · `POST /models/test` (`{model, reasoning?}`) ·
-`GET /models/tools?model=` (`supported: true|false|null`) · `GET /approvals` ·
-`POST /approvals/{id}` (`{approve}`) · `GET|POST /settings` (`openrouter_api_key`, `kaggle_base_url`) · `GET /memory/summary`, `/memory/context` (`?workspace_id=`).
-`workspace_id` omitted = the first workspace. Laya: `POST http://127.0.0.1:8790/v1/systemone`, `GET /health`.
+## Config (`colony/config.py`; env vars **beat** `~/.colony/.env`)
+`OLLAMA_BASE_URL`, `OLLAMA_API_KEY`, `OLLAMA_CONTEXT_WINDOW` · `OPENCLAW_GATEWAY_ENABLED/URL/TOKEN` · `JEV_API_KEY` (never in chat/logs), `JEV_URL`
+(`https://api.beatapi.io`), `JEV_MODEL` (`jev-1.13-free` | `jev-1.13`) · `LAYA_URL` (set by `colony` unless Jev key) · `DATA_DIR` (`~/.colony`) ·
+`HISTORY_MAX_MESSAGES` (60) · `MAX_ATTACHMENT_MB` (20) · `PROJECTS_DIR` (`~/Documents/Colony Projects`, a new workspace's folder) · `APPROVAL_TIMEOUT_SECONDS` (120) · `MOCK_MODE` · `HOST`/`PORT`. `WORKSPACE_DIR` is read once by the legacy migration.
+OpenClaw's own config is `~/.openclaw/openclaw.json` (path override `OPENCLAW_CONFIG_PATH`); its Ollama key is separate from `~/.colony/.env`.
 
-## OpenRouter facts worth knowing (currently unusable: balance negative)
-- Public `GET https://openrouter.ai/api/v1/models` (no key) gives `context_length`
-  and `supported_parameters` (contains `"tools"` if the model can call tools).
-- Free models: 20 req/min; **50 req/day if <$10 credits ever bought** (1000 if ≥$10);
-  429s often mean an upstream shared pool is full, not your quota.
-- Tool-capable & verified with Pi: `nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3-super-120b-a12b:free`.
-  **`z-ai/glm-5.2:free` cannot use tools** (404); paid `z-ai/glm-5.2` can.
+## On-disk (`~/.colony/`)
+`.env` · `workspaces.json` (workspaces + teams) · `history.json` (+ `colony.sqlite` mirror) · `self_improve/<ws>/` (shared memory) ·
+`openclaw-agents/<agent_id>/` (per-agent files) · `openclaw_seen.json`, `openclaw_usage.json` · `attachments/<ws>/` · `openclaw-agents/<agent>/skills/` · logs. Project folders live wherever the workspace says (default `~/Documents/Colony Projects/<name>`).
+Writes go through `JsonStore` (atomic temp + replace). Unknown JSON keys are preserved.
 
-## Constraints from the owner
-- No regex anywhere in our code; ask before adding any dependency; reply to the owner in Thai, explain in detailed prose.
-- Zero budget right now: prefer free paths (Kaggle, Laya) and say so when something would cost money.
-- Check this memory bank first at the start of a session (the owner asks for it).
+## Run / test
+```bash
+.venv/bin/colony                          # server + Gateway (+ Laya if no Jev key) + opens browser
+.venv/bin/colony --reload --no-open       # dev
+.venv/bin/python -m pytest -q tests       # 152 pass, ~40 s. NOT bare pytest (it would collect openclaw-main 2/)
+(cd desktop && npm run dev)               # Tauri window
+```
+Coucou build: see `systemPatterns.md` §9. Laya on an Intel Mac needs Python 3.11 + transformers <5 + numpy <2 (`laya-runtime/requirements.txt`).
+
+## Test conventions
+`tests/conftest.py` autouse: own `DATA_DIR` and `PROJECTS_DIR`, `MOCK_MODE=true`, blank `LAYA_URL`/`JEV_API_KEY`, temp `OPENCLAW_CONFIG_PATH`, fake Gateway log.
+Never touch the real `~/.colony/.env` (`config._ENV_FILE`) or `~/.openclaw`. `test_web.py` checks every `$('id')` exists and every JS file passes `node --check`.
+Real-model checks are scripts against a throwaway-HOME dev server, not pytest.

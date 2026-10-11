@@ -74,3 +74,11 @@ def test_models_without_a_table_entry_use_the_default_window():
     client.put("/api/roles", json={"roles": [{"id": "x", "name": "X", "model": "ollama/mystery:1b", "when": "any", "instructions": ""}]})
     row = client.get("/api/context").json()["agents"][0]
     assert row["window"] == get_settings().ollama_context_window and row["percent"] is None
+
+
+def test_slash_commands_and_their_replies_are_not_part_of_the_team_conversation():
+    from colony.core.context import drop_commands
+    chat = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "/status"}, {"role": "assistant", "content": "🦞 OpenClaw 2026"},
+            {"role": "user", "content": "what is 2+2?"}, {"role": "assistant", "content": "4"}]
+    assert [m["content"] for m in drop_commands(chat)] == ["hi", "hello", "what is 2+2?", "4"]

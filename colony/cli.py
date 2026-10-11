@@ -38,6 +38,10 @@ def _start_laya() -> None:
 
     runtime = Path(__file__).resolve().parent.parent / "laya-runtime"
     python = runtime / ".venv" / "bin" / "python"
+    from .config import get_settings
+    if get_settings().jev_api_key:
+        print("🧭  Jev decides through its API (JEV_API_KEY) — not starting the local Laya.")
+        return
     if os.environ.get("LAYA_URL") or not python.exists():
         return
     env = {**os.environ, "LAYA_HOST": "127.0.0.1", "LAYA_PORT": str(LAYA_PORT), "LAYA_DEVICE": "cpu",
@@ -79,28 +83,61 @@ def _start_openclaw() -> None:
         print("⚠️  OpenClaw Gateway not started: needs Node (>=24.16) and openclaw-main 2/ (see memory-bank/techContext.md).")
         return
     log_path = Path.home() / ".colony" / "openclaw.log"
-    gateway = subprocess.Popen(["node", "openclaw.mjs", "gateway", "run", "--allow-unconfigured"], cwd=source,
-                               env={**os.environ, "COLONY_URL": f"http://{settings.host}:{settings.port}"},   # for colony-gate.ts
-                               stdout=open(log_path, "w"), stderr=subprocess.STDOUT, start_new_session=True)
-    # Uvicorn re-raises SIGTERM, so atexit never runs: a tiny shell watches our pid and stops the gateway after us.
-    subprocess.Popen(["sh", "-c", f"while kill -0 {os.getpid()} 2>/dev/null; do sleep 2; done; kill -TERM -{gateway.pid}"],
-                     start_new_session=True)
+
+    def spawn() -> "subprocess.Popen":
+        gateway = subprocess.Popen(["node", "openclaw.mjs", "gateway", "run", "--allow-unconfigured"], cwd=source,
+                                   env={**os.environ, "COLONY_URL": f"http://{settings.host}:{settings.port}"},   # for colony-gate.ts
+                                   stdout=open(log_path, "a"), stderr=subprocess.STDOUT, start_new_session=True)
+        # Uvicorn re-raises SIGTERM, so atexit never runs: a tiny shell watches our pid and stops the gateway after us.
+        subprocess.Popen(["sh", "-c", f"while kill -0 {os.getpid()} 2>/dev/null; do sleep 2; done; kill -TERM -{gateway.pid}"],
+                         start_new_session=True)
+        return gateway
+
+    open(log_path, "w").close()
+    gateway = spawn()
     print(f"🦞  OpenClaw Gateway starting on port {OPENCLAW_PORT} (takes ~50 s; chat shows a not-ready notice until then) …")
+
+    def watchdog() -> None:
+        """The Gateway has died twice on its own (its state-lock heartbeat starved when the Mac was overloaded, then it could not
+        take the lock back). Start it again, at most 3 times in 10 minutes so a Gateway that cannot start does not loop."""
+        nonlocal gateway
+        restarts: list[float] = []
+        while True:
+            time.sleep(5)
+            if gateway.poll() is None:
+                continue
+            now = time.monotonic()
+            restarts = [t for t in restarts if now - t < 600]
+            if len(restarts) >= 3:
+                print(f"⚠️  OpenClaw Gateway keeps dying — not restarting it again. See {log_path}")
+                return
+            restarts.append(now)
+            print(f"⚠️  OpenClaw Gateway exited (code {gateway.returncode}) — starting it again.")
+            gateway = spawn()
+
+    def warm_up() -> None:
+        """The first turn after a start took ~100 s on this Mac (measured 2026-10-11, later ones ~5 s): pay it now, not on the first message."""
+        try:
+            from .core.workspaces import list_workspaces
+            from .engine import openclaw
+            openclaw.ping_model(settings, list_workspaces()[0].roles[0].model)
+            print("🦞  OpenClaw warmed up.")
+        except Exception as exc:    # a failed warm-up only means the first message is slow
+            print(f"⚠️  OpenClaw warm-up failed: {exc}")
 
     def report() -> None:
         for _ in range(60):
-            if gateway.poll() is not None:
-                print(f"⚠️  OpenClaw Gateway exited (code {gateway.returncode}) — see {log_path}")
-                return
             try:
                 urllib.request.urlopen(f"http://127.0.0.1:{OPENCLAW_PORT}/readyz", timeout=1)
                 print("🦞  OpenClaw Gateway ready.")
+                warm_up()
                 return
             except OSError:
                 time.sleep(2)
         print(f"⚠️  OpenClaw Gateway still not ready after 2 min — see {log_path}")
 
     threading.Thread(target=report, daemon=True).start()
+    threading.Thread(target=watchdog, daemon=True).start()
 
 
 def main() -> None:

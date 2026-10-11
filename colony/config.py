@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # `colony` sets it itself when laya-runtime/ is installed (cli.py).
     laya_url: str | None = None
 
+    # Jev as an API (https://docs.beatapi.io/decisions). When the key is set it decides before Laya does, and
+    # `colony` doesn't start the local Laya. jev-1.13-free is $0 but rate limited; jev-1.13 bills input tokens only.
+    jev_api_key: str | None = None
+    jev_url: str = "https://api.beatapi.io"
+    jev_model: str = "jev-1.13-free"
+
     # ── Agent tools (files + commands, run by OpenClaw) ──────────────────
     # Old global "workspace folder" setting; only read once, to give the first workspace its project folder
     # (core/workspaces.py). Each workspace now has its own folder.
@@ -42,6 +48,7 @@ class Settings(BaseSettings):
     # ── Feature flags ─────────────────────────────────────────────────────────
     history_max_messages: int = 60     # one workspace = one long conversation; OpenClaw compacts each agent's session itself
     max_attachment_mb: int = 20        # per attached file
+    projects_dir: Path = Path.home() / "Documents" / "Colony Projects"     # each new workspace gets its own project folder here
     mock_mode: bool = False           # True → skip real LLM calls (dev/test)
 
     # ── Server ────────────────────────────────────────────────────────────────

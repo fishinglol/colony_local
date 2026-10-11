@@ -35,7 +35,7 @@ class MessageResponse(BaseModel):
     role_id: str | None = None
     role_name: str | None = None
     channel: str = "auto"
-    decided_by: str | None = None      # "nemotron" | "laya" | "direct" | "only_role" | "fallback"
+    decided_by: str | None = None      # "jev" | "nemotron" | "laya" | "direct" | "only_role" | "fallback"
     confidence: float | None = None
     memory_saved: bool = False
     actions: list[str] = Field(default_factory=list)

@@ -14,6 +14,8 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -22,10 +24,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ..config import Settings, get_settings
 from ..core import attachments
-from ..core.activity import add_action, set_activity
+from ..core.activity import add_action, set_activity, set_partial
 from ..llm.http import ProviderError
 
 logger = logging.getLogger(__name__)
@@ -115,10 +118,99 @@ def agent_dir(settings: Settings, agent_id: str) -> Path:
     return settings.data_dir / "openclaw-agents" / agent_id
 
 
-def agents_md(memory: Path) -> str:
-    """AGENTS.md of an agent: how the team's shared memory works. OpenClaw reads it into the session's first turn."""
-    return f"""# Team memory (managed by Colony)
-The folder {memory} is the team's shared memory: plain files every teammate reads and writes, with the read, write and edit tools,
+def skills_dir(settings: Settings, agent_id: str) -> Path:
+    """The skills only this agent has: one folder per skill, each with a SKILL.md. OpenClaw finds them in the agent's workspace."""
+    return agent_dir(settings, agent_id) / "skills"
+
+
+def _frontmatter(skill_md: Path) -> dict[str, str]:
+    """name / description from the `---` block at the top of a SKILL.md (single-line values only)."""
+    try:
+        lines = skill_md.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != "---":
+        return {}
+    found: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, _, value = line.partition(":")
+        if key in ("name", "description") and value.strip():
+            found[key] = value.strip().strip("\"'")
+    return found
+
+
+def list_skills(settings: Settings, agent_id: str) -> list[dict[str, str]]:
+    """The skills this agent has: [{name, description, folder}]. `folder` is the path under the skills folder; a skill
+    one group folder down (skills/<group>/<name>/SKILL.md, what a cloned repo looks like) counts too, as it does for OpenClaw."""
+    root = skills_dir(settings, agent_id)
+    out = []
+    for skill_md in sorted(root.glob("SKILL.md")) + sorted(root.glob("*/SKILL.md")) + sorted(root.glob("*/*/SKILL.md")):
+        folder = skill_md.parent
+        meta = _frontmatter(skill_md)
+        out.append({"name": meta.get("name", folder.name), "description": meta.get("description", ""),
+                    "folder": folder.relative_to(root).as_posix()})
+    return out
+
+
+def add_skills(settings: Settings, agent_id: str, source: Path) -> list[str]:
+    """Copy the skill in `source` (a folder with SKILL.md) or every skill folder inside it to this agent. Returns the folder names added."""
+    found = [source] if (source / "SKILL.md").is_file() else [f for f in sorted(source.iterdir()) if (f / "SKILL.md").is_file()]
+    root = skills_dir(settings, agent_id)
+    for folder in found:
+        shutil.copytree(folder, root / folder.name, dirs_exist_ok=True)
+    return [f.name for f in found]
+
+
+def github_clone_url(url: str) -> str:
+    """https://github.com/<owner>/<repo>[.git | /tree/...] -> the https clone URL. Only github.com over https is accepted."""
+    parsed = urlparse(url.strip())
+    parts = [p for p in parsed.path.split("/") if p]
+    if parsed.scheme != "https" or parsed.netloc not in ("github.com", "www.github.com") or len(parts) < 2:
+        raise ValueError("Paste a GitHub repository link, like https://github.com/owner/repo")
+    return f"https://github.com/{parts[0]}/{parts[1].removesuffix('.git')}.git"
+
+
+def add_skills_from_github(settings: Settings, agent_id: str, url: str) -> list[str]:
+    """Clone a public GitHub repository (shallow, into a temporary folder) and copy every skill in it (a folder with a
+    SKILL.md) straight into this agent's skills folder. Returns the folder names added."""
+    clone_url = github_clone_url(url)
+    with tempfile.TemporaryDirectory(prefix="colony-skills-") as tmp:
+        target = Path(tmp) / "repo"
+        try:
+            done = subprocess.run(["git", "clone", "--depth", "1", "--quiet", clone_url, str(target)], capture_output=True, text=True,
+                                  timeout=120, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError("Could not download that repository (is git installed, and is the link right?).") from exc
+        if done.returncode != 0:
+            raise ValueError("Could not download that repository: it may be private or the link is wrong.")
+        found = [p.parent for p in sorted(target.rglob("SKILL.md")) if ".git" not in p.parts and len(p.relative_to(target).parts) <= 4]
+        root = skills_dir(settings, agent_id)
+        added = []
+        for folder in found:
+            name = folder.name if folder != target else target.name and clone_url.rsplit("/", 1)[-1].removesuffix(".git")
+            shutil.copytree(folder, root / name, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git"))
+            added.append(name)
+        return added
+
+
+def remove_skill(settings: Settings, agent_id: str, folder: str) -> bool:
+    """Take one skill away from this agent. `folder` is a folder path from list_skills (nothing outside the skills folder is touched)."""
+    root = skills_dir(settings, agent_id).resolve()
+    target = (root / folder).resolve()
+    if target == root or root not in target.parents or not (target / "SKILL.md").is_file():
+        return False
+    shutil.rmtree(target)
+    return True
+
+
+def agents_md(memory: Path, writable: bool = True) -> str:
+    """AGENTS.md of an agent: how the team's shared memory works. OpenClaw reads it into the session's first turn.
+    `writable` is False when the agent is fenced to a project folder: the memory files are outside it, so Colony keeps what
+    the user asks to be remembered and the agent only searches them."""
+    if writable:
+        keeping = f"""The folder {memory} is the team's shared memory: plain files every teammate reads and writes, with the read, write and edit tools,
 always allowed for these files. Use absolute paths, and write there (not in this workspace).
 - MEMORY.md: lasting facts and decisions.  USER.md: what you know about the user (preferences, background).  memory/YYYY-MM-DD.md: daily notes.
 - USER.md in your own workspace is only a copy of the shared one, made before each turn.
@@ -127,7 +219,13 @@ always allowed for these files. Use absolute paths, and write there (not in this
 For every user message decide whether it holds a lasting fact worth keeping (name, preference, pet, decision, project detail).
 If it does, your first action is a tool call: edit {memory}/USER.md for facts about the user, {memory}/MEMORY.md for anything else
 (read the file first, keep existing lines, add one short line). After the tool result, confirm briefly.
-Never say you saved something unless that tool call succeeded.
+Never say you saved something unless that tool call succeeded."""
+    else:
+        keeping = f"""The folder {memory} is the team's shared memory (MEMORY.md, USER.md, memory/YYYY-MM-DD.md). You are fenced to the project
+folder, so you cannot edit those files. When the user asks you to remember something, Colony writes it there for you:
+just confirm briefly. Do not try to write those files yourself."""
+    return f"""# Team memory (managed by Colony)
+{keeping}
 
 ## Recalling things
 Call memory_search (it covers the shared memory and your own notes). It matches words, not meaning, and not across languages: search
@@ -157,13 +255,14 @@ def _seed_memory_dir(path: Path) -> None:
             (path / name).write_text(text, encoding="utf-8")
 
 
-def write_agent_files(settings: Settings, workspace_id: str, agent_id: str, name: str, instructions: str) -> str:
+def write_agent_files(settings: Settings, workspace_id: str, agent_id: str, name: str, instructions: str,
+                      memory_writable: bool = True) -> str:
     """Write one agent's persona files into its own workspace and copy the shared USER.md in (OpenClaw injects USER.md from the
     agent's workspace). Returns a short hash of the persona files: the session tag (they are read once per session)."""
     shared, mine = memory_dir(settings, workspace_id), agent_dir(settings, agent_id)
     _seed_memory_dir(shared)
     (mine / "memory").mkdir(parents=True, exist_ok=True)       # OpenClaw's dreaming writes its own notes here
-    rules, soul, identity = agents_md(shared), soul_md(name, instructions), identity_md(name)
+    rules, soul, identity = agents_md(shared, memory_writable), soul_md(name, instructions), identity_md(name)
     _write_if_changed(mine / "AGENTS.md", rules)
     _write_if_changed(mine / "SOUL.md", soul)
     _write_if_changed(mine / "IDENTITY.md", identity)
@@ -196,14 +295,20 @@ def keep_if_asked(settings: Settings, workspace_id: str, user_text: str, before:
     return True
 
 
-def _tool_allowlist(tools: Any, web_search: bool, connectors: list[str]) -> list[str]:
+def _tool_allowlist(tools: Any, web_search: bool, connectors: list[str], fenced: bool = False, skills: bool = False) -> list[str]:
     """OpenClaw tool names for what the Colony role switched on. A connector's tools are named <server>__<tool>.
-    Every agent gets read/write/edit so it can keep the shared memory files, and memory_search/memory_get to find things in them; the gate (core/gate.py) lets a role without
-    file permissions touch only those files."""
+    Without a project folder (`fenced` False) every agent gets read/write/edit: its only files are the shared memory files, so
+    it can keep them. Fenced to a project folder, it gets exactly the file tools the role has. memory_search/memory_get always."""
     allowed = ["web_search"] if web_search else []
-    allowed += [f"{name}__*" for name in connectors] + ["read", "write", "edit", "memory_search", "memory_get"]
+    allowed += [f"{name}__*" for name in connectors] + ["memory_search", "memory_get"]
+    if not fenced or getattr(tools, "read", "off") != "off":
+        allowed.append("read")
+    if not fenced or getattr(tools, "write", "off") != "off":
+        allowed += ["write", "edit"]
     if getattr(tools, "bash", "off") != "off":
         allowed.append("exec")
+    if skills:
+        allowed.append("skills_read")   # opens one of the agent's own skills; not the project's files
     return allowed
 
 
@@ -261,16 +366,16 @@ def _quiet_background(cfg: dict[str, Any]) -> bool:
 
 def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None, web_search: bool = False,
                  connectors: list[str] | None = None, folder: str | None = None, memory: Path | None = None,
-                 wait_seconds: float = 150.0) -> None:
+                 thinking: str = "default", wait_seconds: float = 150.0) -> None:
     """Make sure OpenClaw has this agent, set up lean: add/update it in OpenClaw's config (hot reload) and wait until listed.
 
     Lean on purpose: OpenClaw's default prompt is ~46k tokens (every tool schema + skills + bootstrap files); with only the
-    role's tools and no skills it is ~5k (measured 2026-10-09). The persona travels in the system prompt; the workspace files
+    role's tools and no skills it is ~5k (an agent's own skills, added in Colony, are the only ones it gets) (measured 2026-10-09). The persona travels in the system prompt; the workspace files
     (our tiny AGENTS.md, MEMORY.md, USER.md) are injected only on a session's first turn (contextInjection "continuation-skip").
     The agent's workspace is its own folder (persona files; never the user's project folder, because OpenClaw writes its own files
     into an agent workspace); the Colony workspace's shared memory folder is added to its memory search. The model is chosen per turn (x-openclaw-model), not stored here.
     """
-    allow = _tool_allowlist(tools, web_search, connectors or [])
+    allow = _tool_allowlist(tools, web_search, connectors or [], fenced=bool(folder), skills=bool(list_skills(settings, agent_id)))
     with config_lock:
         cfg = read_config()
         agents = cfg.setdefault("agents", {})
@@ -278,7 +383,10 @@ def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None
         existing = entries.get(agent_id)
         workspace = str(agent_dir(settings, agent_id))
         want = {"name": name, "workspace": workspace, "tools": {"profile": "minimal", "alsoAllow": allow},
-                "contextInjection": "continuation-skip", "skills": []}
+                "contextInjection": "continuation-skip",
+                "skills": [skill["name"] for skill in list_skills(settings, agent_id)]}     # only this agent's own skills
+        if thinking != "default":   # the role's reasoning level; "default" leaves the model's own setting
+            want["thinkingDefault"] = thinking
         if memory:      # the team's shared memory is searched from every agent's own workspace
             want["memory"] = {"search": {"extraPaths": [str(memory)]}}
         if folder:
@@ -437,10 +545,37 @@ def _gateway_restarted(settings: Settings, wait: float = 200.0) -> bool:
     return False
 
 
+def _read_stream(resp: Any, on_text: Any) -> dict:
+    """Read a chat-completions event stream; `on_text(text so far)` runs on every chunk. Returns what the non-streaming call would."""
+    text, reasoning, usage, model, calls = "", "", {}, None, {}
+    for raw in resp:
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:") or line.endswith("[DONE]"):
+            continue
+        chunk = json.loads(line[5:])
+        model = chunk.get("model") or model
+        usage = chunk.get("usage") or usage
+        delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+        reasoning += delta.get("reasoning_content") or ""
+        for tc in delta.get("tool_calls") or []:       # arrives in pieces: name once, arguments in fragments
+            fn = tc.get("function") or {}
+            call = calls.setdefault(tc.get("index", 0), {"function": {"name": "", "arguments": ""}})["function"]
+            call["name"] += fn.get("name") or ""
+            call["arguments"] += fn.get("arguments") or ""
+        if delta.get("content"):
+            text += delta["content"]
+            on_text(text)
+    return {"model": model, "usage": usage,
+            "choices": [{"message": {"content": text, "reasoning_content": reasoning, "tool_calls": list(calls.values())}}]}
+
+
 def _gateway_post(settings: Settings, payload: dict, model: str | None, timeout: float, path: str = "/v1/chat/completions",
-                  _retry: bool = True) -> dict:
+                  _retry: bool = True, on_text: Any = None) -> dict:
     """POST a chat completion to the Gateway. `model` (ollama/…) is the real model the agent should use for this call.
+    With `on_text`, the reply is streamed and `on_text(text so far)` is called as it grows; the result has the same shape.
     If the Gateway restarted under the call, it is sent once more when the Gateway is back."""
+    if on_text:
+        payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
     gateway_url = settings.openclaw_gateway_url.rstrip("/")
     headers = {"Content-Type": "application/json"}
     if settings.openclaw_gateway_token:
@@ -451,19 +586,22 @@ def _gateway_post(settings: Settings, payload: dict, model: str | None, timeout:
                                  headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return _read_stream(resp, on_text) if on_text else json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         err_msg = exc.read().decode("utf-8", errors="replace")
         logger.error("OpenClaw Gateway HTTP %s: %s", exc.code, err_msg)
         unprepared = "remain unavailable" in err_msg or "preparation" in err_msg      # the Gateway is still preparing its agents
+        if _retry and exc.code == 403 and "authority changed" in err_msg:     # the Gateway was applying a config change mid-request
+            time.sleep(6)
+            return _gateway_post(settings, payload, model, timeout, path, _retry=False, on_text=on_text)
         if _retry and exc.code >= 500 and ((unprepared and wait_prepared(settings)) or _gateway_restarted(settings)):
-            return _gateway_post(settings, payload, model, timeout, path, _retry=False)
+            return _gateway_post(settings, payload, model, timeout, path, _retry=False, on_text=on_text)
         raise ProviderError(f"OpenClaw Gateway request failed ({exc.code}): {err_msg[:200]}",
                             status=exc.code, provider_message=err_msg) from exc
     except OSError as exc:
         logger.error("OpenClaw Gateway connection error: %s", exc)
         if _retry and _gateway_restarted(settings):
-            return _gateway_post(settings, payload, model, timeout, path, _retry=False)
+            return _gateway_post(settings, payload, model, timeout, path, _retry=False, on_text=on_text)
         raise ProviderError(f"OpenClaw Gateway unreachable at {gateway_url} ({exc})", status=None) from exc
 
 
@@ -542,6 +680,44 @@ def get_openclaw_status(settings: Settings | None = None) -> dict[str, Any]:
     }
 
 
+def capability_text(settings: Settings, agent_id: str, role_name: str, tools: Any, web_search: bool,
+                    connectors: list[str], folder: str | None) -> str:
+    """What this turn tells the agent about itself: who it is and which tools it has (the system part of a turn)."""
+    cap_lines = []
+    if web_search:
+        cap_lines.append("- Web search: ENABLED (tool `web_search`). You have no live data: for prices, news, weather or anything recent, "
+                         "call it first and never answer from memory.")
+    else:
+        cap_lines.append("- Web search: DISABLED (rely on what you know and on workspace files)")
+    if tools:
+        r = getattr(tools, "read", "off")
+        w = getattr(tools, "write", "off")
+        b = getattr(tools, "bash", "off")
+        cap_lines.append(f"- Project files, read: {'ALLOWED (tool: read)' if r != 'off' else 'DISABLED'}")
+        cap_lines.append(f"- Project files, write/edit: {'ALLOWED (tools: write, edit)' if w != 'off' else 'DISABLED'}")
+        cap_lines.append(f"- Run commands: {'ALLOWED (tool: exec)' if b != 'off' else 'DISABLED'}")
+    if connectors:
+        cap_lines.append(f"- Connected apps (MCP servers): {', '.join(connectors)}. Their tools are named <server>__<tool>.")
+        apps = getattr(tools, "mcp_apps", None)
+        if apps and "composio" in connectors:
+            cap_lines.append(f"  * Through Composio use only these apps: {', '.join(apps)}. If the user asks for another app, say it is not connected to you and stop.")
+    if folder:
+        cap_lines.append(f"- Workspace Project Folder: {folder}")
+    skills = list_skills(settings, agent_id)
+    if skills:
+        cap_lines.append("- Your skills (open one with tool `skills_read`, always allowed). When a request matches a skill, call "
+                         "`skills_read` with its name first and follow it:\n" + "\n".join(
+                             f"  * {k['name']}: {k['description'][:160]}" for k in skills))
+    cap_lines.append(f"- Your skills folder: {skills_dir(settings, agent_id)}. To add a skill the user points you to (a folder with SKILL.md), "
+                     "read its files and write each to <skills folder>/<skill name>/<same relative path>; the user is asked to approve each file. "
+                     "If it is a GitHub link and you may run commands, `git clone --depth 1` it into a temporary folder, "
+                     "then `cp -r` only the folders that contain a SKILL.md, each straight into your skills folder "
+                     "(<skills folder>/<skill name>/SKILL.md), never the whole repository. "
+                     "The skill works from the user's next message.")
+
+    return f"You are {role_name} (your persona is in SOUL.md).\n" + "\n".join(cap_lines)
+
+
 def run_openclaw_turn(
     *,
     settings: Settings,
@@ -560,6 +736,7 @@ def run_openclaw_turn(
     connectors: list[str] | None = None,
     media: list[dict] | None = None,
     folder: str | None = None,
+    reasoning: str = "default",
     timeout: float = 600.0,
 ) -> OpenClawTurnResult:
     """Execute one turn through OpenClaw Gateway.
@@ -575,9 +752,9 @@ def run_openclaw_turn(
                      detail="OpenClaw is still preparing its agents (after a start this takes a few minutes)…")
         wait_prepared(settings)
     ensure_agent(settings, agent_id, role_name, tools=tools, web_search=web_search, connectors=connectors,
-                 folder=str(folder) if folder else None, memory=memory)
+                 folder=str(folder) if folder else None, memory=memory, thinking=reasoning)
     model = f"openclaw/{agent_id}"
-    persona = write_agent_files(settings, workspace_id, agent_id, role_name, role_instructions)
+    persona = write_agent_files(settings, workspace_id, agent_id, role_name, role_instructions, memory_writable=not folder)
     session_user = build_session_user(workspace_id, role_id, channel, persona)
 
     # Assemble messages
@@ -585,29 +762,7 @@ def run_openclaw_turn(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     else:
-        cap_lines = []
-        if web_search:
-            cap_lines.append("- Web search: ENABLED (tool `web_search`). You have no live data: for prices, news, weather or anything recent, "
-                             "call it first and never answer from memory.")
-        else:
-            cap_lines.append("- Web search: DISABLED (rely on what you know and on workspace files)")
-        if tools:
-            r = getattr(tools, "read", "off")
-            w = getattr(tools, "write", "off")
-            b = getattr(tools, "bash", "off")
-            cap_lines.append(f"- Project files, read: {'ALLOWED (tool: read)' if r != 'off' else 'DISABLED'}")
-            cap_lines.append(f"- Project files, write/edit: {'ALLOWED (tools: write, edit)' if w != 'off' else 'DISABLED'}")
-            cap_lines.append(f"- Run commands: {'ALLOWED (tool: exec)' if b != 'off' else 'DISABLED'}")
-        if connectors:
-            cap_lines.append(f"- Connected apps (MCP servers): {', '.join(connectors)}. Their tools are named <server>__<tool>.")
-            apps = getattr(tools, "mcp_apps", None)
-            if apps and "composio" in connectors:
-                cap_lines.append(f"  * Through Composio use only these apps: {', '.join(apps)}. If the user asks for another app, say it is not connected to you and stop.")
-        if folder:
-            cap_lines.append(f"- Workspace Project Folder: {folder}")
-
-        full_sys = f"You are {role_name} (your persona is in SOUL.md).\n" + "\n".join(cap_lines)
-        messages.append({"role": "system", "content": full_sys})
+        messages.append({"role": "system", "content": capability_text(settings, agent_id, role_name, tools, web_search, connectors, folder)})
 
     # Agent replies in the history already carry their "[Name]" label; roles are kept as they are.
     new_to_session = unseen(settings, session_user, history or [], history_ids or [])
@@ -642,7 +797,8 @@ def run_openclaw_turn(
         msg = {"content": "".join(texts)}
         usage = {"prompt_tokens": (data.get("usage") or {}).get("input_tokens")}
     else:
-        data = _gateway_post(settings, payload, role_model, timeout)
+        data = _gateway_post(settings, payload, role_model, timeout,
+                             on_text=lambda text: set_partial(workspace_id, role_id, role_name, text))
         choices = data.get("choices") or []
         if not choices:
             raise ProviderError("OpenClaw Gateway returned no completion choices")

@@ -179,3 +179,20 @@ def test_an_agent_left_on_a_non_ollama_model_is_told_to_pick_one(monkeypatch):
     body = client.post("/api/messages", json={"message": "hi", "role_id": "boss"}).json()
     assert "not an Ollama model" in body["reply"] and "Boss" in body["reply"] and turns == []
     assert client.get("/api/workspaces/local/messages").json()["messages"] == []
+
+
+def test_a_new_workspace_gets_a_project_folder_of_its_own(tmp_path):
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from colony.app import app
+    c = TestClient(app)
+    one = c.post("/api/workspaces", json={"name": "Shop / Beta"}).json()
+    two = c.post("/api/workspaces", json={"name": "Shop / Beta"}).json()
+    assert Path(one["folder"]).name == "Shop - Beta" and Path(one["folder"]).is_dir()      # a path-safe name, created
+    assert Path(two["folder"]).name == "Shop - Beta 2"                                       # never shared with another workspace
+    assert Path(one["folder"]).parent == tmp_path / "projects"
+    chat_only = c.post("/api/workspaces", json={"name": "Talk", "folder": ""}).json()        # "" = chat only, on purpose
+    assert chat_only["folder"] is None and chat_only["effective_folder"] is None
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    assert c.post("/api/workspaces", json={"name": "Own", "folder": str(mine)}).json()["folder"] == str(mine.resolve())

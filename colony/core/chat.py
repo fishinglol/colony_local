@@ -15,10 +15,10 @@ from ..store.history import append_exchange, get_all_messages
 from ..engine import openclaw
 from . import attachments, mcp
 from .agents import Role, ToolAccess, apply_mode
-from .context import labelled_history, strip_self_label
+from .context import drop_commands, labelled_history, strip_self_label
 from .decider import decide
 from .errors import explain
-from ..llm.ollama import is_ollama
+from ..llm.ollama import OLLAMA_CLOUD_MODELS, is_ollama, normalize_ollama_model_id
 from .project_folder import project_folder
 from .workspaces import get_workspace
 
@@ -82,7 +82,9 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     from .activity import add_step, clear_activity, set_activity, take_steps
     set_activity(workspace_id, step="routing", detail="Routing intent (Nemotron-3-nano / Laya)...")
 
-    decision = decide(message=text, roles=roles, settings=settings, direct_role=direct)
+    skills = {r.id: "; ".join(f"{k['name']} ({k['description'][:100]})" for k in openclaw.list_skills(settings, openclaw.agent_id_for(workspace_id, r.id)))
+              for r in roles}
+    decision = decide(message=text, roles=roles, settings=settings, direct_role=direct, skills=skills)
     role = decision.role
     tools = effective_tools(role)
     set_activity(
@@ -91,6 +93,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
         agent_name=role.name,
         model=role.model,
         detail=f"{role.name} ({role.model}) is preparing response...",
+        role_id=role.id,
     )
     # Where this was typed: the group chat ("auto") or an agent's direct chat. Display only.
     meta = {
@@ -101,7 +104,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
         "confidence": decision.confidence,
     }
     if not settings.mock_mode and not (is_ollama(role.model) or role.model.startswith("openclaw/")):
-        clear_activity(workspace_id)
+        clear_activity(workspace_id, role.id)
         return _notice(workspace_id, f"⚠️ {role.name} uses `{role.model}`, which is not an Ollama model, and Colony now runs only Ollama models "
                        f"through OpenClaw. Click ✎ on {role.name} and pick one from the list.", meta)
 
@@ -111,7 +114,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     # the whole history would be sent again.
     note, media = attachments.render(settings, workspace_id, refs, recent=True)
     full_text = text + note
-    messages = [m for m in get_all_messages(conversation_id) if not m.get("evicted")]
+    messages = drop_commands([m for m in get_all_messages(conversation_id) if not m.get("evicted")])
     history, history_ids = labelled_history(settings, workspace_id, messages, next_media=len(media))
 
     # ── 3. The agent's turn in OpenClaw ───────────────────────────────────────
@@ -124,9 +127,10 @@ def handle_message(request: MessageRequest) -> MessageResponse:
         from .trace import describe       # a believable trace so the UI can be tried without a Gateway
         for tool, params, out in (("exec", {"command": "ls -la"}, "total 8\n-rw-r--r--  README.md"), ("read", {"path": "README.md"}, "# Demo"),
                                   ("memory_search", {"query": text[:40]}, "no results")):
-            add_step(workspace_id, describe(tool, params, out, None, 120))
+            add_step(workspace_id, describe(tool, params, out, None, 120), role.id)
         reply_text = f"[mock] {role.name} ({role.model}) — {text[:80]}" + (f" [+{len(refs)} file(s)]" if refs else "")
     elif not (settings.openclaw_gateway_enabled and openclaw.is_openclaw_available(settings)):
+        clear_activity(workspace_id, role.id)
         return _notice(workspace_id, "⚠️ OpenClaw Gateway ยังไม่พร้อม — รอสักครู่หลังเปิด `colony` หรือตรวจสอบที่ Settings", meta)
     else:
         memory_before = openclaw.snapshot_memory(settings, workspace_id)
@@ -147,6 +151,8 @@ def handle_message(request: MessageRequest) -> MessageResponse:
                 connectors=connectors_for(role),
                 media=media,
                 folder=folder,
+                # a level left over from a previous (reasoning) model must not reach a model that cannot think
+                reasoning=role.reasoning if OLLAMA_CLOUD_MODELS.get(normalize_ollama_model_id(role.model), {}).get("reasoning") else "default",
             )
             reply_text = openclaw_res.reply
             # the Gateway names the agent (openclaw/<id>); what a person wants to see is the model that answered
@@ -156,6 +162,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
             openclaw_session = openclaw_res.session_user
         except ProviderError as exc:
             logger.error("OpenClaw Gateway turn error: %s", exc)
+            clear_activity(workspace_id, role.id)
             return MessageResponse(
                 workspace_id=workspace_id, message_id=f"msg_{uuid4().hex}",
                 reply=explain(exc, role.model),
@@ -167,7 +174,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     memory_saved = bool(openclaw_session and openclaw.keep_if_asked(settings, workspace_id, text, memory_before))
     reply_text += _actions_line(actions)
 
-    steps, worked_s = take_steps(workspace_id), round(time.monotonic() - started, 1)
+    steps, worked_s = take_steps(workspace_id, role.id), round(time.monotonic() - started, 1)
     meta = {**meta, "steps": steps, "worked_s": worked_s, "thinking": thinking or None}
 
     # ── 5. Persist ────────────────────────────────────────────────────────────
@@ -181,7 +188,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
     if openclaw_session:
         openclaw.mark_seen(settings, openclaw_session, assistant_msg_id)
 
-    clear_activity(workspace_id)
+    clear_activity(workspace_id, role.id)
 
     return MessageResponse(
         workspace_id=workspace_id, message_id=assistant_msg_id,

@@ -2,8 +2,10 @@
 import logging
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from ..config import get_settings
+from ..core import native_turn
 from ..core.chat import handle_message
 from ..core.context import report
 from ..core.workspaces import WorkspaceNotFound, get_workspace, list_workspaces
@@ -37,6 +39,33 @@ def post_message(request: MessageRequest) -> MessageResponse:
     except Exception as exc:
         logger.exception("Unexpected error in /messages")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class TurnFinish(BaseModel):
+    turn_id: str
+    reply: str | None = None
+    failed: bool = False
+
+
+@router.post("/turns/prepare")
+def prepare_turn(request: MessageRequest) -> dict:
+    """The app runs a direct-chat turn with the Gateway itself: this sets the agent up and says what to send.
+    {native: false, reason} means "use POST /messages instead"."""
+    try:
+        return native_turn.prepare(request)
+    except WorkspaceNotFound as exc:
+        raise HTTPException(status_code=404, detail="That workspace doesn't exist.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/turns/finish")
+def finish_turn(body: TurnFinish) -> dict:
+    """The app's Gateway turn is over: its reply joins the team's conversation."""
+    try:
+        return native_turn.finish(body.turn_id, body.reply, body.failed)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="That turn is not running.") from exc
 
 
 @router.get("/context")

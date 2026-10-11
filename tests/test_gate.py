@@ -81,7 +81,7 @@ def test_files_and_commands_stay_inside_the_project_folder(tmp_path, answers):
 
 
 def test_no_project_folder_means_no_files_or_commands(answers):
-    ws = client.post("/api/workspaces", json={"name": "Chat only"}).json()["id"]
+    ws = client.post("/api/workspaces", json={"name": "Chat only", "folder": ""}).json()["id"]
     role = {"id": "coder", "name": "Coder", "model": "ollama/test", "when": "code", "tools": {"bash": "allow", "read": "allow"}}
     client.put(f"/api/roles?workspace_id={ws}", json={"roles": [role]})
     verdict = ask(openclaw.agent_id_for(ws, "coder"), "exec", command="ls")
@@ -166,3 +166,33 @@ def test_background_work_nobody_asked_for_is_switched_off_once():
     assert openclaw._quiet_background(cfg) is True
     assert cfg["skills"]["workshop"]["autonomous"]["mode"] == "off" and cfg["agents"]["defaults"]["heartbeat"]["every"] == "0m"
     assert openclaw._quiet_background(cfg) is False
+
+
+def test_an_agent_may_read_its_own_skills_and_no_one_elses(tmp_path, answers):
+    ws, agent = team(tmp_path, read="off")
+    mine = openclaw.skills_dir(get_settings(), agent) / "zebra" / "SKILL.md"
+    other = openclaw.skills_dir(get_settings(), openclaw.agent_id_for(ws, "writer")) / "zebra" / "SKILL.md"
+    assert ask(agent, "skills_read", name="zebra")["allow"] is True
+    assert ask(agent, "read", path=str(mine))["allow"] is True
+    assert answers.asked == []
+    assert ask(agent, "read", path=str(other))["allow"] is True         # another agent's skill is outside its own: the user is asked
+    assert len(answers.asked) == 1
+
+
+def test_installing_a_skill_by_chat_asks_the_user_for_every_file(tmp_path, answers):
+    ws, agent = team(tmp_path, read="off", write="off")
+    source = tmp_path.parent / "elsewhere" / "zebra"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("---\nname: zebra\n---\n")
+    (source / "helper.md").write_text("x")
+    mine = openclaw.skills_dir(get_settings(), agent) / "zebra" / "SKILL.md"
+    assert ask(agent, "read", path=str(source / "SKILL.md"))["allow"] is True      # outside the folder, but asked first
+    assert ask(agent, "read", path=str(source / "helper.md"))["allow"] is True      # a file inside a skill folder
+    assert ask(agent, "write", path=str(mine), content="x")["allow"] is True        # even though write is off
+    assert len(answers.asked) == 3
+    assert ask(agent, "read", path=str(mine))["allow"] is True                       # reading its own skill is not a question
+    assert len(answers.asked) == 3
+    (tmp_path.parent / "elsewhere" / "secret.txt").write_text("s")
+    assert ask(agent, "read", path=str(tmp_path.parent / "elsewhere" / "secret.txt"))["allow"] is False   # not a skill folder
+    answers.reply = False
+    assert ask(agent, "write", path=str(mine), content="x")["allow"] is False        # "no" is respected

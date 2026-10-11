@@ -48,7 +48,7 @@ def tool_finished(call: ToolResult) -> dict:
     """Called by OpenClaw (colony-gate, after each tool call): becomes a step under the agent's reply."""
     found = _find(call.agent_id)
     if found is not None:
-        add_step(found[0].id, describe(call.tool, call.params, call.result, call.error, call.duration_ms))
+        add_step(found[0].id, describe(call.tool, call.params, call.result, call.error, call.duration_ms), found[1].id)
     return {"status": "ok"}
 
 

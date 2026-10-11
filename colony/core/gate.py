@@ -8,7 +8,7 @@ A question that nobody answers in time counts as "no".
 from pathlib import Path
 
 from ..config import Settings
-from ..engine.openclaw import agent_id_for, memory_dir
+from ..engine.openclaw import agent_dir, agent_id_for, memory_dir, skills_dir
 from .agents import Role, apply_mode
 from .activity import set_activity
 from .approvals import approvals
@@ -54,6 +54,8 @@ def describe(tool: str, kind: str, params: dict) -> str:
     path = str(params.get("path") or "")
     if kind == "bash":
         return f"Run this command:\n{str(params.get('command') or '')[:SHOWN]}"
+    if kind == "read":
+        return f"Read {path}"
     if kind == "write":
         return f"Write {path}:\n{str(params.get('content') or '')[:SHOWN]}"
     if kind == "edit":
@@ -78,6 +80,19 @@ def decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
     return verdict
 
 
+def _in_skill_folder(path: Path) -> bool:
+    """True when `path` is a skill's SKILL.md or lies in a folder (up to 3 levels up) that has one."""
+    if not path.is_absolute():
+        return False
+    return any((p / "SKILL.md").is_file() for p in [path, *path.parents][:4]) or path.name == "SKILL.md"
+
+
+def _ask(role: Role, shown_as: str, kind: str, tool: str, params: dict, settings: Settings, title: str) -> dict:
+    ok = approvals.ask(agent=role.name, tool=shown_as, title=title + str(params.get("path") or ""),
+                       message=describe(tool, kind, params), timeout=settings.approval_timeout_seconds)
+    return {"allow": True, "reason": ""} if ok else _no("The user did not approve this action.")
+
+
 def _decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
     found = _find(agent_id)
     if found is None:
@@ -92,7 +107,22 @@ def _decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
     path = params.get("path")
     if kind in FILE_TOOLS and isinstance(path, str) and Path(path).is_absolute() and not escapes(memory_dir(settings, workspace.id), path):
         return {"allow": True, "reason": ""}
+    # Installing a skill by chat: the agent copies a skill folder the user pointed it to into its own skills folder.
+    # Writing there and reading the source are always asked, whatever the agent's file permissions are.
+    if kind in FILE_TOOLS and isinstance(path, str) and path:
+        mine = skills_dir(settings, agent_id).resolve()
+        if kind != "read" and not escapes(mine, str(Path(path).expanduser())) and Path(path).expanduser().is_absolute():
+            return _ask(role, "write", kind, tool, params, settings, "Add to your skills: ")
+        if kind == "read" and escapes(mine, path) and _in_skill_folder(Path(path).expanduser()):
+            return _ask(role, "read", kind, tool, params, settings, "Read a skill to add it: ")
     folder, _ = project_folder(workspace.folder)
+    if tool == "skills_read":       # OpenClaw only lists this agent's own skills; reading one changes nothing
+        return {"allow": True, "reason": ""}
+    if kind == "read" and isinstance(path, str) and path:       # a skill's own files: read-only, whatever the project folder is
+        mine = skills_dir(settings, agent_id).resolve()
+        base = folder or agent_dir(settings, agent_id)          # relative paths start where the agent's commands start
+        if not escapes(mine, str(Path(base, Path(path).expanduser()))):
+            return {"allow": True, "reason": ""}
     if kind in FILE_TOOLS or kind == "bash":
         if folder is None:
             return _no("This workspace has no project folder, so files and commands are off.")

@@ -82,12 +82,14 @@ function addAgent(text, meta, iso, question, files = []) {
   if (meta.model && meta.model !== 'none') head.append(el('span', 'tag', shortModel(meta.model)));
   if (meta.decided_by === 'ollama') {
     head.append(el('span', 'tag', `Nemotron ${Math.round((meta.confidence || 0) * 100)}%`));
+  } else if (meta.decided_by === 'jev') {
+    head.append(el('span', 'tag', `Jev ${Math.round((meta.confidence || 0) * 100)}%`));
   } else if (meta.decided_by === 'laya') {
     head.append(el('span', 'tag', `Laya ${Math.round((meta.confidence || 0) * 100)}%`));
   }
   if (meta.decided_by === 'fallback') {
     const t = el('span', 'tag warn', 'Decider unavailable — default agent');
-    t.title = 'The decider (Laya or Nemotron) could not be reached, so the first agent answered.'; head.append(t);
+    t.title = 'The decider (Jev, Laya or Nemotron) could not be reached, so the first agent answered.'; head.append(t);
   }
   if (meta.memory_saved) head.append(el('span', 'tag mem', 'Saved to memory'));
   const body = el('div', 'md'); body.innerHTML = renderMarkdown(text);

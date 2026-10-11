@@ -81,7 +81,7 @@ def test_an_agent_is_allowed_exactly_the_connectors_ticked_for_it(monkeypatch, t
         openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(mcp="allow"), connectors=["composio", "docs"],
                               wait_seconds=0.1)
     allow = openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["tools"]["alsoAllow"]
-    assert allow == ["composio__*", "docs__*", "read", "write", "edit", "memory_search", "memory_get"]      # read/write/edit: the shared memory files
+    assert allow == ["composio__*", "docs__*", "memory_search", "memory_get", "read", "write", "edit"]      # read/write/edit: the shared memory files
 
 
 def test_links_open_in_the_real_browser_and_only_web_addresses(monkeypatch):

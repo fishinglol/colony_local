@@ -26,7 +26,7 @@ OLLAMA_CLOUD_MODELS = {
     "nemotron-3-ultra": {"context": 1_000_000, "tools": True, "reasoning": True},
     "gemma4:31b": {"context": 262_144, "tools": True, "reasoning": False},
     "gpt-oss:20b": {"context": 128_000, "tools": True, "reasoning": False},
-    "gpt-oss:120b": {"context": 262_144, "tools": True, "reasoning": True},
+    "gpt-oss:120b": {"context": 262_144, "tools": True, "reasoning": True, "can_turn_off": False},
 }
 
 

@@ -50,6 +50,8 @@ def describe(tool: str, params: dict | None, result: Any = None, error: str | No
         kind, title, detail = "write", "Wrote", _where(params)
     elif tool == "edit":
         kind, title, detail = "write", "Edited", _where(params)
+    elif tool == "skills_read":
+        kind, title, detail = "skill", "Used skill", str(params.get("name") or "")
     elif tool == "memory_search":
         kind, title, detail = "memory", "Searched memory", str(params.get("query") or "")
     elif tool == "memory_get":

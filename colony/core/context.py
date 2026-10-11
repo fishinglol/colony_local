@@ -56,6 +56,21 @@ def labelled_history(settings: Settings, workspace_id: str, messages: list[dict]
     return [_labelled(m, seen) for m in recent], [m["id"] for m in recent]
 
 
+def drop_commands(messages: list[dict]) -> list[dict]:
+    """The conversation without slash commands ("/status") and their replies: that is the app talking to OpenClaw, not the team."""
+    kept, skip_reply = [], False
+    for m in messages:
+        if m.get("role") == "user" and (m.get("content") or "").lstrip().startswith("/"):
+            skip_reply = True
+            continue
+        if skip_reply and m.get("role") == "assistant":
+            skip_reply = False
+            continue
+        skip_reply = False
+        kept.append(m)
+    return kept
+
+
 def strip_self_label(reply: str, role_name: str) -> str:
     """Models sometimes copy the [Name] label style onto their own reply; remove it."""
     label = f"[{role_name}]"

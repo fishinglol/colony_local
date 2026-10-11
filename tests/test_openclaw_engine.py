@@ -1,5 +1,7 @@
 """Tests for OpenClaw Gateway Engine Bridge."""
 import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -82,6 +84,8 @@ def test_run_openclaw_turn_success(monkeypatch):
     class FakeChatResp:
         def __enter__(self):
             return self
+        def __iter__(self):
+            return _sse(self.read())
         def __exit__(self, *args):
             pass
         def read(self):
@@ -181,11 +185,15 @@ def test_each_role_gets_its_own_openclaw_agent_added_to_the_config(monkeypatch, 
     assert cfg["agents"]["entries"]["ws_1-coder"]["workspace"].startswith(str(tmp_path))   # never the user's project
     assert cfg["tools"] == {"profile": "full"}                  # the rest of the config is untouched
     entry = cfg["agents"]["entries"]["ws_1-coder"]              # lean: only the tools the role has (46k -> ~5k tokens)
-    assert entry["tools"] == {"profile": "minimal", "alsoAllow": ["web_search", "read", "write", "edit", "memory_search", "memory_get", "exec"]}
+    assert entry["tools"] == {"profile": "minimal", "alsoAllow": ["web_search", "memory_search", "memory_get", "read", "write", "edit", "exec"]}
     assert entry["skills"] == [] and entry["contextInjection"] == "continuation-skip"
 
     openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(), web_search=False)   # the user turned tools off
-    assert openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["tools"]["alsoAllow"] == ["read", "write", "edit", "memory_search", "memory_get"]
+    assert openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["tools"]["alsoAllow"] == ["memory_search", "memory_get", "read", "write", "edit"]
+    assert "thinkingDefault" not in openclaw.read_config()["agents"]["entries"]["ws_1-coder"]   # "default" = the model's own
+
+    openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(), thinking="high")      # the role's reasoning level
+    assert openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["thinkingDefault"] == "high"
 
 
 def test_ensure_agent_fails_clearly_when_the_gateway_never_lists_it(monkeypatch, tmp_path):
@@ -222,6 +230,8 @@ def test_run_turn_sends_only_new_messages_to_the_roles_own_agent(monkeypatch, tm
             pass
         def read(self):
             return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+        def __iter__(self):
+            return _sse(self.read())
 
     def fake_urlopen(req, timeout=None):
         sent.update(json.loads(req.data))
@@ -285,6 +295,8 @@ def test_images_travel_to_openclaw_as_data_uri_parts_on_the_new_message(monkeypa
             pass
         def read(self):
             return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+        def __iter__(self):
+            return _sse(self.read())
 
     def fake_urlopen(req, timeout=None):
         sent.update(json.loads(req.data))
@@ -374,7 +386,7 @@ def test_the_request_carries_only_the_name_and_permissions(monkeypatch, tmp_path
     settings = Settings(openclaw_gateway_url="http://127.0.0.1:18789", data_dir=tmp_path)
     monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
     seen = {}
-    monkeypatch.setattr(openclaw, "_gateway_post", lambda settings, payload, model, timeout, path="": (seen.update(payload=payload) or
+    monkeypatch.setattr(openclaw, "_gateway_post", lambda settings, payload, model, timeout, path="", on_text=None: (seen.update(payload=payload) or
                         {"choices": [{"message": {"content": "ok"}}]}))
     openclaw.run_openclaw_turn(settings=settings, role_id="coder", role_name="Coder", role_model="ollama/x", role_instructions="SECRET PERSONA",
                                workspace_id="ws_1", channel="auto", user_message="hi", tools=ToolAccess(read="allow"))
@@ -447,3 +459,221 @@ def test_a_turn_waits_for_the_gateway_to_finish_preparing(monkeypatch, tmp_path)
     res = openclaw.run_openclaw_turn(settings=settings, role_id="c", role_name="C", role_model="ollama/x", role_instructions="",
                                      workspace_id="ws_1", channel="auto", user_message="hi")
     assert res.reply == "ok" and len(waited) == 1
+
+
+def test_a_403_while_the_gateway_reloads_its_config_is_sent_again_and_not_blamed_on_the_key(monkeypatch):
+    import io, urllib.error
+    settings = Settings(openclaw_gateway_url="http://127.0.0.1:18789")
+    calls = []
+    body = b'{"error":{"message":"Gateway requester authority changed","type":"permission_error"}}'
+
+    class Ok:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self): return b'{"ok": true}'
+
+    def reloading(req, timeout=None):
+        calls.append(1)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError("u", 403, "x", {}, io.BytesIO(body))
+        return Ok()
+
+    monkeypatch.setattr(openclaw.urllib.request, "urlopen", reloading)
+    monkeypatch.setattr(openclaw.time, "sleep", lambda s: None)
+    assert openclaw._gateway_post(settings, {}, None, 5) == {"ok": True} and len(calls) == 2
+
+    from colony.core.errors import explain
+    exc = ProviderError("OpenClaw Gateway request failed (403): " + body.decode(), status=403, provider_message=body.decode())
+    assert "API Key" not in explain(exc, "ollama/nemotron-3-super")
+
+
+def _sse(body: bytes):
+    """A non-streaming reply body as the event stream the Gateway sends when `stream` is on."""
+    data = json.loads(body)
+    msg = data["choices"][0]["message"]
+    delta = {"content": msg.get("content"), "tool_calls": [{**tc, "index": 0} for tc in msg.get("tool_calls") or []]}
+    chunk = {"model": data.get("model"), "usage": data.get("usage"), "choices": [{"delta": delta}]}
+    return iter([b"data: " + json.dumps(chunk).encode() + b"\n", b"data: [DONE]\n"])
+
+
+def test_gateway_stream_is_read_into_a_normal_reply():
+    import io
+    chunks = [{"model": "openclaw/a", "choices": [{"delta": {"role": "assistant"}}]},
+              {"choices": [{"delta": {"content": "Hel"}}]}, {"choices": [{"delta": {"content": "lo"}}]},
+              {"choices": [], "usage": {"prompt_tokens": 7}}]
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    seen = []
+    data = openclaw._read_stream(io.BytesIO(body.encode()), seen.append)
+    assert seen == ["Hel", "Hello"]
+    assert data["choices"][0]["message"]["content"] == "Hello" and data["usage"]["prompt_tokens"] == 7
+
+
+def make_skill(folder, name, description):
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(f'---\nname: {name}\ndescription: "{description}"\n---\n\n# {name}\n', encoding="utf-8")
+
+
+def test_skills_are_added_from_a_folder_listed_and_given_only_to_that_agent(monkeypatch, tmp_path):
+    settings = Settings(openclaw_gateway_url="http://127.0.0.1:18789", data_dir=tmp_path / "data")
+    one, many = tmp_path / "zebra", tmp_path / "pack"
+    make_skill(one, "zebra-protocol", "Use for the mascot name.")
+    make_skill(many / "a", "alpha", "First.")
+    make_skill(many / "b", "beta", "Second.")
+    assert openclaw.add_skills(settings, "ws_1-coder", one) == ["zebra"]
+    assert openclaw.add_skills(settings, "ws_1-coder", many) == ["a", "b"]
+    assert [s["name"] for s in openclaw.list_skills(settings, "ws_1-coder")] == ["alpha", "beta", "zebra-protocol"]
+    assert openclaw.list_skills(settings, "ws_1-coder")[2]["description"] == "Use for the mascot name."
+    assert openclaw.list_skills(settings, "ws_1-writer") == []
+    make_skill(settings.data_dir / "openclaw-agents" / "ws_1-writer" / "skills" / "repo" / "nested", "nested-skill", "From a cloned repo.")
+    assert [(s["name"], s["folder"]) for s in openclaw.list_skills(settings, "ws_1-writer")] == [("nested-skill", "repo/nested")]
+    assert openclaw.remove_skill(settings, "ws_1-writer", "repo/nested") is True
+    assert openclaw.remove_skill(settings, "ws_1-writer", "repo") is False         # not a skill folder itself
+
+    openclaw.write_config({"agents": {"entries": {"main": {}}}})
+    monkeypatch.setattr(openclaw, "_known_agents", {"ws_1-coder": None})
+    monkeypatch.setattr(openclaw.time, "sleep", lambda s: None)
+    monkeypatch.setattr(openclaw, "_gateway_lists", lambda *a, **k: True, raising=False)
+    try:
+        openclaw.ensure_agent(settings, "ws_1-coder", "Coder", wait_seconds=0)
+    except ProviderError:
+        pass                                    # no Gateway here; the config is written before it waits
+    assert openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["skills"] == ["alpha", "beta", "zebra-protocol"]
+
+    assert openclaw.remove_skill(settings, "ws_1-coder", "a") is True
+    assert openclaw.remove_skill(settings, "ws_1-coder", "../../x") is False       # never outside the skills folder
+    assert [s["folder"] for s in openclaw.list_skills(settings, "ws_1-coder")] == ["b", "zebra"]
+
+
+def test_skills_api_adds_lists_and_removes(tmp_path):
+    ws = TestClient(app).post("/api/workspaces", json={"name": "S"}).json()["id"]
+    c = TestClient(app)
+    role = {"id": "coder", "name": "Coder", "model": "ollama/test", "when": "code"}
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": [role]})
+    make_skill(tmp_path / "src" / "zebra", "zebra-protocol", "Mascot.")
+    url = f"/api/roles/coder/skills?workspace_id={ws}"
+    assert c.post(url, json={"path": str(tmp_path / "src")}).json()["skills"][0]["name"] == "zebra-protocol"
+    assert c.post(url, json={"path": str(tmp_path / "missing")}).status_code == 400
+    assert c.post(url, json={"path": str(tmp_path)}).status_code == 400          # no SKILL.md anywhere inside
+    assert c.delete(f"/api/roles/coder/skills/zebra?workspace_id={ws}").json()["skills"] == []
+    assert c.get(f"/api/roles/nobody/skills?workspace_id={ws}").status_code == 404
+
+
+def test_a_native_turn_is_prepared_then_saved_to_the_conversation(monkeypatch):
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "N"}).json()["id"]
+    role = {"id": "coder", "name": "Coder", "model": "ollama/gemma4:31b", "when": "code", "instructions": "Be brief."}
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": [role]})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    seen = {}
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda settings, agent_id, name, **k: seen.update(agent=agent_id, **k))
+
+    prep = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "coder", "message": "hello there"}).json()
+    assert prep["native"] is True and prep["agent_id"] == openclaw.agent_id_for(ws, "coder")
+    assert prep["model"] == "ollama/gemma4:31b" and prep["session"].startswith("native-ome-")
+    assert "You are Coder" in prep["message"] and prep["message"].endswith("hello there")
+    assert seen["agent"] == prep["agent_id"]
+
+    done = c.post("/api/turns/finish", json={"turn_id": prep["turn_id"], "reply": "[Coder] hi!"}).json()
+    assert done["saved"] is True
+    messages = c.get(f"/api/workspaces/{ws}/messages").json()["messages"]
+    assert [m["content"] for m in messages][-2:] == ["hello there", "hi!"]      # the user's own words, and the reply without its label
+    assert messages[-1]["metadata"]["role_id"] == "coder" and messages[-1]["metadata"]["decided_by"] == "direct"
+    assert c.post("/api/turns/finish", json={"turn_id": prep["turn_id"], "reply": "x"}).status_code == 404
+
+    # a file that is not there: the app is told to use the normal path, which explains it
+    assert c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "coder", "message": "see",
+                                              "attachments": ["0" * 32]}).json() == {"native": False, "reason": "attachments"}
+
+    # an image and a text file: the image travels as an attachment, the text is pasted under the message
+    import base64
+    up = lambda name, raw: c.post(f"/api/workspaces/{ws}/attachments", json={"name": name, "data": base64.b64encode(raw).decode()}).json()
+    png, txt = up("red.png", b"\x89PNG fake"), up("n.txt", b"hello notes")
+    prep = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "coder", "message": "look",
+                                              "attachments": [png["id"], txt["id"]]}).json()
+    assert prep["native"] is True and [(a["type"], a["fileName"]) for a in prep["attachments"]] == [("image", "red.png")]
+    assert "hello notes" in prep["message"]
+    c.post("/api/turns/finish", json={"turn_id": prep["turn_id"], "reply": "ok"})
+    last_user = c.get(f"/api/workspaces/{ws}/messages").json()["messages"][-2]
+    assert [a["name"] for a in last_user["attachments"]] == ["red.png", "n.txt"]
+
+
+def test_a_group_chat_turn_asks_the_decider_who_answers(monkeypatch):
+    from colony.core import native_turn
+    from colony.core.decider import DeciderResult
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "Mix"}).json()["id"]
+    roles = [{"id": "a", "name": "Ann", "model": "ollama/x", "when": "chat"}, {"id": "b", "name": "Bo", "model": "ollama/y", "when": "code"}]
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    monkeypatch.setattr(native_turn, "decide", lambda message, roles, settings, **k: DeciderResult(role=roles[1], confidence=0.8, source="jev"))
+
+    prep = c.post("/api/turns/prepare", json={"workspace_id": ws, "message": "fix this bug", "channel": "auto"}).json()
+    assert prep["role_id"] == "b" and prep["decided_by"] == "jev" and prep["agent_id"] == openclaw.agent_id_for(ws, "b")
+    c.post("/api/turns/finish", json={"turn_id": prep["turn_id"], "reply": "done"})
+    last = c.get(f"/api/workspaces/{ws}/messages").json()["messages"][-1]
+    assert last["metadata"]["role_id"] == "b" and last["metadata"]["decided_by"] == "jev" and last["metadata"]["channel"] == "auto"
+
+
+def test_a_github_link_becomes_a_clone_url_and_only_github_over_https_is_accepted(tmp_path, monkeypatch):
+    assert openclaw.github_clone_url("https://github.com/ScrapeCreators/social-media-research-skills") == \
+        "https://github.com/ScrapeCreators/social-media-research-skills.git"
+    assert openclaw.github_clone_url("https://github.com/o/r/tree/main/skills").endswith("/o/r.git")
+    for bad in ("http://github.com/o/r", "https://evil.example/o/r", "https://github.com/o", "git@github.com:o/r.git", "file:///etc"):
+        with pytest.raises(ValueError):
+            openclaw.github_clone_url(bad)
+
+    # the clone is stubbed: a repository with two skills in it
+    def fake_run(cmd, **kw):
+        repo = Path(cmd[-1])
+        make_skill(repo / "skills" / "one", "one", "First.")
+        make_skill(repo / "two", "two", "Second.")
+        (repo / "README.md").write_text("x")
+        return type("Done", (), {"returncode": 0, "stderr": ""})()
+    monkeypatch.setattr(openclaw.subprocess, "run", fake_run)
+    settings = Settings(openclaw_gateway_url="http://127.0.0.1:1", data_dir=tmp_path)
+    assert openclaw.add_skills_from_github(settings, "ws_1-coder", "https://github.com/o/r") == ["one", "two"]
+    assert [s["name"] for s in openclaw.list_skills(settings, "ws_1-coder")] == ["one", "two"]
+
+
+def test_fenced_to_a_project_folder_an_agent_gets_exactly_its_role_s_file_tools():
+    allow = openclaw._tool_allowlist(ToolAccess(read="allow", write="off", bash="off"), False, [], fenced=True)
+    assert allow == ["memory_search", "memory_get", "read"]
+    assert "exec" in openclaw._tool_allowlist(ToolAccess(bash="ask"), False, [], fenced=True)
+    assert openclaw._tool_allowlist(ToolAccess(), False, [], fenced=True) == ["memory_search", "memory_get"]    # a chat-only role
+    assert "write" in openclaw._tool_allowlist(ToolAccess(), False, [], fenced=False)     # no folder: it keeps the memory files
+    assert "keeps" not in openclaw.agents_md(Path("/m"), writable=False) and "cannot edit" in openclaw.agents_md(Path("/m"), writable=False)
+
+
+def test_a_native_turn_is_fenced_by_the_gateway_to_the_project_folder(monkeypatch, tmp_path):
+    from colony.core import native_turn
+    c = TestClient(app)
+    folder = tmp_path / "proj"
+    folder.mkdir()
+    ws = c.post("/api/workspaces", json={"name": "F", "folder": str(folder)}).json()["id"]
+    roles = [{"id": "w", "name": "Writer", "model": "ollama/x", "when": "w", "tools": {"read": "allow", "write": "ask"}},
+             {"id": "r", "name": "Reader", "model": "ollama/x", "when": "r", "tools": {"read": "allow"}},
+             {"id": "t", "name": "Talker", "model": "ollama/x", "when": "t"}]
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    got = {r: c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": r, "message": "x"}).json() for r in ("w", "r", "t")}
+    assert got["w"]["permission_mode"] == "guarded" and got["w"]["cwd"] == str(folder)
+    assert got["r"]["permission_mode"] == "read-only" and got["t"]["permission_mode"] == "read-only"
+    assert got["w"]["session"].startswith("native-ome-") and got["w"]["session"] != got["r"]["session"]
+    c.patch(f"/api/workspaces/{ws}", json={"mode": "plan"})        # plan = read only, whatever the agent may do
+    assert c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "w", "message": "x"}).json()["permission_mode"] == "read-only"
+
+    nofolder = c.post("/api/workspaces", json={"name": "N", "folder": ""}).json()["id"]
+    c.put(f"/api/roles?workspace_id={nofolder}", json={"roles": [roles[2]]})
+    chat_only = c.post("/api/turns/prepare", json={"workspace_id": nofolder, "role_id": "t", "message": "x"}).json()
+    assert chat_only["cwd"] == str(openclaw.memory_dir(get_settings(), nofolder)) and chat_only["permission_mode"] == "guarded"

@@ -20,6 +20,8 @@ def _ollama_hint(status: int | None, model: str, exc: ProviderError) -> str:
             f"Ollama server ไม่มีโมเดล `{clean_model}` "
             f"ให้ลองสั่ง `ollama pull {clean_model}` ใน Terminal หรือเลือกโมเดลอื่น"
         )
+    if "authority changed" in msg:      # OpenClaw's own 403 while it reloads its config, not an Ollama key problem
+        return "OpenClaw กำลังโหลดการตั้งค่าใหม่ ลองส่งข้อความเดิมอีกครั้งในอีกสักครู่"
     if status in (401, 403):
         return "Ollama API Key ไม่ถูกต้อง ตรวจสอบใน **Settings** ว่าวาง key ถูกต้องหรือไม่"
     if status is not None and status >= 500:

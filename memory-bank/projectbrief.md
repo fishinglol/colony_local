@@ -1,48 +1,27 @@
 # Project Brief — Colony Local
-> **2026-10-09 direction change (owner):** Colony is becoming the **UI shell of OpenClaw** (`openclaw-main 2/`, v2026.9.8).
-> Every backend system (model calls, tools, plugins/MCP, sessions, memory, approvals) is to be 100% OpenClaw's; Colony keeps
-> the UI and workspaces. The text below that mentions **Pi** (`engine/pi.py`, `pi-runtime/`) describes the *old* backend and
-> is being replaced. Plan and cut list: see `activeContext.md` ("DIRECTION CHANGE"). Not yet implemented in code.
+_Read order for a new AI: this file → `activeContext.md` → `systemPatterns.md` (+ `openclaw-capabilities.md` before touching `engine/openclaw.py`). `handoff.md` is the owner's hand-off note. Updated 2026-10-12._
 
-## What this is
-A small, self-contained **local multi-AI chat app** — its own git repo (`~/Desktop/Colony-Local`, branch `main`).
-Organised in **workspaces** (project spaces, each with its own team, one shared conversation, memory and project
-folder). One screen, several user-defined AI "agents" (each = a name, a model, a *when to answer* rule and a *how to
-answer* rule), a decider that picks which agent answers in the group chat `# mix` (**Laya** on this computer, or Jev
-on OpenRouter), and **one shared conversation + long-term memory that every agent sees**. Launched by a `colony`
-command (browser) or a native window (`desktop/`, Tauri). Agents can also be given **tools** (read files, edit files,
-run commands, connected apps) inside one project folder, with the user approving each write/command.
-
-Models come from OpenRouter (any id) or, since 2026-09-29, from **the user's own Kaggle GPU** (`kaggle/<name>` ids
-served by Ollama in a Kaggle notebook) — the owner has no budget, so Kaggle + Laya is the current way to run it.
-
-It is **not** the hosted Colony product: no Supabase, no auth, no billing, no cloud backend of ours. Single user,
-everything on the user's machine (`~/.colony/`). The code was lifted and simplified from ColonyBridge's
-`backend/app/ai_ant/` and `general_chat/model_pool.py`, then moved out into this repo (commit `40fe948`); it shares
-no runtime code with them.
+## What it is
+A small, self-contained **local multi-AI chat app** (repo `~/Desktop/Colony-Local`, branch `feature/openclaw-architecture`).
+- **Workspaces** (project spaces): each has its own team of agents, ONE shared conversation, shared memory, and a project folder (a new workspace gets its own under `~/Documents/Colony Projects/<name>`, setting `PROJECTS_DIR`; `folder: ""` = chat only).
+- **Agents** are user-defined: name, model (Ollama), *when to answer* rule, *how to answer* rule, tool permissions.
+- **Rooms:** `# mix` (group chat; a *decider* picks who answers) and one direct room per agent. Rooms are display-only: every agent sees the whole conversation.
+- **Backend = OpenClaw.** Colony is the workspaces + decider + team/skill/memory-folder service (and a fallback approval gate); every agent turn (model call, tools, sessions, permissions, approvals, compaction, memory) runs in the OpenClaw Gateway, which the Coucou app now talks to directly.
+- Single user, everything on this Mac (`~/.colony/`). No Supabase/auth/billing. Not the hosted Colony product.
 
 ## The one problem it solves
-People who use several AI models keep re-explaining their context when they switch between them. Colony Local is one
-place where every model already knows the whole conversation and what it has learned about you.
-*"One conversation, many models, nobody needs to be told twice."*
+"One conversation, many models, nobody needs to be told twice."
 
-## Goals
-- One screen; add/edit/remove agents in the UI (models chosen from a picker or typed as any id) — the user, not the
-  code, decides who answers what.
-- Every agent sees the same history and memory ("shared context"), labelled by speaker, trimmed to its own window.
-- The decider routes `# mix` messages; direct chats bypass it. When it is down the fallback is visible, never silent.
-- Agents may work on the user's files safely: per-agent permissions, approval cards, a project-folder fence.
-- Runs at zero cost when needed (Kaggle free GPU + Laya on the Mac).
-- Long-term: the core tool for solo-founder startups (owner's words). Marketing is out of scope.
+## Front-ends (all talk to the same HTTP API on :8765)
+1. Web UI `colony/web/` (plain ES modules, served by FastAPI) — launched by the `colony` command.
+2. Tauri window `desktop/` wrapping the same UI.
+3. **Coucou desktop app `coco_local/`** (Swift, notch/menu bar) — untracked, own `.git`. Talks to the Gateway directly for chat (WebSocket) and to Colony for teams/settings/history.
 
 ## Scope (repo root)
-`colony/` (Python package: API, core logic, LLM/HTTP layer, memory, history store, Pi engine, static web UI), `tests/`,
-`desktop/` (Tauri shell), `pi-runtime/` (Pi install), `laya-runtime/` (local decider), `kaggle/` (the notebook that
-serves the models + `model_exam.py`, the per-model exam), `spike-pi/` (throwaway experiment, kept as evidence), `memory-bank/` (these notes + `docs/`).
+`colony/` (Python package) · `tests/` · `desktop/` (Tauri) · `coco_local/` (Coucou fork) · `laya-runtime/` (local decider, optional) ·
+`openclaw-main 2/` (OpenClaw v2026.9.8 source, gitignored, ~3.6 GB) · `memory-bank/` (these notes).
 
-## Source of truth history
-- `memory-bank/docs/local-multi-ai-mvp-handoff.md` — the original running log of decisions and dated entries up to
-  2026-09-26 (newest at the bottom). Newer history lives in `progress.md`.
-- `memory-bank/docs/local-restructure-spec.md` — the spec for the package split (DONE).
-- `spike-pi/README.md` — the experiment that justified using Pi.
-- Git: this repo's `main` (see activeContext.md for what is and isn't committed).
+## Goals / non-goals
+- Goal: the user (not the code) decides who answers what; agents can safely work on files (per-agent permissions, approval cards, folder fence);
+  runs at zero cost (Ollama + OpenClaw local, Jev free tier). Long-term: core tool for solo-founder startups.
+- Non-goals: marketing, accounts, multi-user, own agent engine (deleted: Pi, own loop, OpenRouter/Kaggle providers).

@@ -30,12 +30,12 @@ def test_a_finished_tool_call_becomes_a_step_of_the_running_turn():
     body = {"agent_id": agent, "tool": "exec", "params": {"command": "pwd"}, "result": "/tmp", "duration_ms": 12}
     assert client.post("/api/activity/tool", json=body).status_code == 200     # no turn running: ignored
     assert take_steps(ws) == []
-    set_activity(ws, step="thinking", detail="x")
+    set_activity(ws, step="thinking", detail="x", role_id="coding")
     client.post("/api/activity/tool", json=body)
-    steps = take_steps(ws)
+    steps = take_steps(ws, "coding")
     assert len(steps) == 1 and steps[0]["detail"] == "pwd" and steps[0]["output"] == "/tmp"
     assert client.get(f"/api/activity?workspace_id={ws}").json()["steps"][0]["title"] == "Ran command"
-    clear_activity(ws)
+    clear_activity(ws, "coding")
     assert client.post("/api/activity/tool", json={**body, "agent_id": "nobody"}).status_code == 200
 
 
@@ -60,3 +60,25 @@ def test_the_settings_window_can_read_an_agents_files(tmp_path):
     assert after["started"] is True and "Show code first." in after["soul"] and "Coder" in after["identity"]
     assert "tea is good" in after["memory"] and after["daily"][0]["date"] == "2026-10-05" and "memory_search" in after["rules"]
     assert client.get(f"/api/roles/nobody/files?workspace_id={ws}").status_code == 404
+
+
+def test_two_agents_answering_at_once_keep_their_own_steps():
+    from colony.core.activity import add_step, get_activity
+    ws = "ws_parallel"
+    set_activity(ws, step="running", detail="a", role_id="chitchat")
+    set_activity(ws, step="running", detail="b", role_id="reasoning")
+    add_step(ws, {"title": "buddy search"}, "chitchat")
+    add_step(ws, {"title": "thinker search 1"}, "reasoning")
+    add_step(ws, {"title": "thinker search 2"}, "reasoning")
+    assert [s["title"] for s in take_steps(ws, "reasoning")] == ["thinker search 1", "thinker search 2"]
+    assert len(get_activity(ws)["steps"]) == 3                       # the live view shows the whole workspace
+    clear_activity(ws, "reasoning")                                  # the first to finish must not take the other's steps
+    assert [s["title"] for s in take_steps(ws, "chitchat")] == ["buddy search"]
+    add_step(ws, {"title": "late"}, "chitchat")
+    clear_activity(ws, "chitchat")
+    assert take_steps(ws, "chitchat") == []
+
+
+def test_using_a_skill_is_a_step_with_its_name():
+    step = trace.describe("skills_read", {"name": "zebra"}, "text")
+    assert (step["kind"], step["title"], step["detail"]) == ("skill", "Used skill", "zebra")

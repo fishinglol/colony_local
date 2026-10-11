@@ -1,4 +1,6 @@
 """Agent (role) endpoints and the model list that feeds the editor's dropdown."""
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -8,7 +10,8 @@ from ..core.context import supports_tools
 from ..core.errors import explain
 from ..core.models import MODEL_POOL
 from ..core.workspaces import WorkspaceNotFound, get_workspace, save_roles
-from ..engine.openclaw import agent_dir, agent_id_for, identity_md, memory_dir, ping_model, soul_md
+from ..engine.openclaw import (add_skills, add_skills_from_github, agent_dir, agent_id_for, identity_md, list_skills, memory_dir, ping_model, remove_skill,
+                               soul_md)
 from ..llm.http import ProviderError
 from ..llm.ollama import OLLAMA_CLOUD_MODELS, normalize_ollama_model_id
 
@@ -77,6 +80,67 @@ def get_role_files(role_id: str, workspace_id: str | None = None) -> dict:
     }
 
 
+class SkillSource(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)    # a folder with SKILL.md, or a folder of such folders
+
+
+def _agent_id(role_id: str, workspace_id: str | None) -> str:
+    workspace = _workspace(workspace_id)
+    if not any(r.id == role_id for r in workspace.roles):
+        raise HTTPException(status_code=404, detail="That agent doesn't exist.")
+    return agent_id_for(workspace.id, role_id)
+
+
+@router.get("/roles/{role_id}/skills")
+def get_skills(role_id: str, workspace_id: str | None = None) -> dict:
+    """The skills this agent has (only this agent can use them)."""
+    return {"skills": list_skills(get_settings(), _agent_id(role_id, workspace_id))}
+
+
+@router.post("/roles/{role_id}/skills")
+def post_skills(role_id: str, payload: SkillSource, workspace_id: str | None = None) -> dict:
+    """Give this agent the skill(s) found in a folder on this Mac. The folder is copied; the original stays where it is."""
+    settings, agent_id = get_settings(), _agent_id(role_id, workspace_id)
+    source = Path(payload.path).expanduser()
+    if not source.is_dir():
+        raise HTTPException(status_code=400, detail="That folder doesn't exist.")
+    if not add_skills(settings, agent_id, source):
+        raise HTTPException(status_code=400, detail="No skill found there: a skill is a folder with a SKILL.md file.")
+    return {"skills": list_skills(settings, agent_id)}
+
+
+class GithubSource(BaseModel):
+    url: str = Field(min_length=1, max_length=300)
+
+
+@router.post("/roles/{role_id}/skills/github")
+def post_skills_github(role_id: str, payload: GithubSource, workspace_id: str | None = None) -> dict:
+    """Give this agent the skills found in a public GitHub repository (downloaded now, once)."""
+    settings, agent_id = get_settings(), _agent_id(role_id, workspace_id)
+    try:
+        added = add_skills_from_github(settings, agent_id, payload.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not added:
+        raise HTTPException(status_code=400, detail="No skill found in that repository: a skill is a folder with a SKILL.md file.")
+    return {"skills": list_skills(settings, agent_id)}
+
+
+@router.delete("/roles/{role_id}/skills/{folder:path}")
+def delete_skill(role_id: str, folder: str, workspace_id: str | None = None) -> dict:
+    settings, agent_id = get_settings(), _agent_id(role_id, workspace_id)
+    if not remove_skill(settings, agent_id, folder):
+        raise HTTPException(status_code=404, detail="That skill doesn't exist.")
+    return {"skills": list_skills(settings, agent_id)}
+
+
+def _levels(info: dict) -> dict | None:
+    """The thinking levels OpenClaw offers an Ollama model (low|medium|high|max), or None when the model does not reason."""
+    if not info.get("reasoning"):
+        return None
+    return {"efforts": ["low", "medium", "high", "max"], "default": None, "can_turn_off": info.get("can_turn_off", True)}
+
+
 @router.get("/models")
 def get_models() -> dict:
     """The models the picker offers (the Ollama models OpenClaw runs), each with what it can do."""
@@ -88,7 +152,7 @@ def get_models() -> dict:
             "source": "ollama", "source_label": "Ollama API",
             "label": m.label, "note": m.note, "suggested": True,
             "capabilities": {"tools": info.get("tools", True), "inputs": ["text", "image", "file"],
-                             "reasoning": info.get("reasoning", False), "reasoning_levels": None,
+                             "reasoning": info.get("reasoning", False), "reasoning_levels": _levels(info),
                              "context": info.get("context")},
         })
     return {"models": models, "catalog": True}

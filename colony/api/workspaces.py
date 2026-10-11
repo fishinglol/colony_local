@@ -29,7 +29,7 @@ def view(workspace: Workspace) -> dict:
     return {
         "id": workspace.id, "name": workspace.name, "created_at": workspace.created_at,
         "folder": workspace.folder, "effective_folder": str(folder) if folder else None, "folder_source": source, "mode": workspace.mode,
-        "agents": [{"id": r.id, "name": r.name, "model": r.model} for r in workspace.roles],
+        "agents": [{"id": r.id, "name": r.name, "model": r.model, "when": r.when} for r in workspace.roles],
     }
 
 

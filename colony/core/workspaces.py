@@ -48,6 +48,17 @@ def _store() -> JsonStore:
     return JsonStore(get_settings().data_dir / "workspaces.json", None)
 
 
+def _new_project_folder(name: str) -> str:
+    """A fresh project folder for a new workspace, under Settings.projects_dir: <name>, or <name> 2, 3... if that is taken."""
+    safe = "".join(c if c.isalnum() or c in " -_" else "-" for c in name).strip(" -_") or "workspace"
+    base = get_settings().projects_dir
+    folder, n = base / safe, 2
+    while folder.exists():
+        folder, n = base / f"{safe} {n}", n + 1
+    folder.mkdir(parents=True)
+    return str(folder)
+
+
 def _clean_name(name: str) -> str:
     name = " ".join(name.split())
     if not name:
@@ -151,7 +162,8 @@ def get_workspace(workspace_id: str | None) -> Workspace:
 
 def create_workspace(name: str, folder: str | None = None, copy_agents_from: str | None = None) -> Workspace:
     """A new, empty workspace: its own conversation and memory. Its agents start as a copy of another
-    workspace's team, or the default team."""
+    workspace's team, or the default team. With no `folder` given it gets a new project folder of its own
+    (folder "" means chat only, on purpose)."""
     with _LOCK:
         workspaces = _load()
         if copy_agents_from:
@@ -161,8 +173,11 @@ def create_workspace(name: str, folder: str | None = None, copy_agents_from: str
             roles = [r.model_copy(deep=True) for r in source.roles]
         else:
             roles = [r.model_copy(deep=True) for r in DEFAULT_ROLES]
+        name = _clean_name(name)
+        if folder is None:
+            folder = _new_project_folder(name)
         created = Workspace(
-            id=f"ws_{uuid4().hex[:10]}", name=_clean_name(name), roles=roles, created_at=_now(),
+            id=f"ws_{uuid4().hex[:10]}", name=name, roles=roles, created_at=_now(),
             folder=str(check_folder(folder)) if folder and folder.strip() else None,
         )
         _save([*workspaces, created])
