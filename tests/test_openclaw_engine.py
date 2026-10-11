@@ -185,11 +185,11 @@ def test_each_role_gets_its_own_openclaw_agent_added_to_the_config(monkeypatch, 
     assert cfg["agents"]["entries"]["ws_1-coder"]["workspace"].startswith(str(tmp_path))   # never the user's project
     assert cfg["tools"] == {"profile": "full"}                  # the rest of the config is untouched
     entry = cfg["agents"]["entries"]["ws_1-coder"]              # lean: only the tools the role has (46k -> ~5k tokens)
-    assert entry["tools"] == {"profile": "minimal", "alsoAllow": ["web_search", "memory_search", "memory_get", "read", "write", "edit", "exec"]}
+    assert entry["tools"] == {"profile": "minimal", "alsoAllow": ["web_search", "memory_search", "memory_get", "cron", "read", "write", "edit", "exec"]}
     assert entry["skills"] == [] and entry["contextInjection"] == "continuation-skip"
 
     openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(), web_search=False)   # the user turned tools off
-    assert openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["tools"]["alsoAllow"] == ["memory_search", "memory_get", "read", "write", "edit"]
+    assert openclaw.read_config()["agents"]["entries"]["ws_1-coder"]["tools"]["alsoAllow"] == ["memory_search", "memory_get", "cron", "read", "write", "edit"]
     assert "thinkingDefault" not in openclaw.read_config()["agents"]["entries"]["ws_1-coder"]   # "default" = the model's own
 
     openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(), thinking="high")      # the role's reasoning level
@@ -644,9 +644,9 @@ def test_a_github_link_becomes_a_clone_url_and_only_github_over_https_is_accepte
 
 def test_fenced_to_a_project_folder_an_agent_gets_exactly_its_role_s_file_tools():
     allow = openclaw._tool_allowlist(ToolAccess(read="allow", write="off", bash="off"), False, [], fenced=True)
-    assert allow == ["memory_search", "memory_get", "read"]
+    assert allow == ["memory_search", "memory_get", "cron", "read"]
     assert "exec" in openclaw._tool_allowlist(ToolAccess(bash="ask"), False, [], fenced=True)
-    assert openclaw._tool_allowlist(ToolAccess(), False, [], fenced=True) == ["memory_search", "memory_get"]    # a chat-only role
+    assert openclaw._tool_allowlist(ToolAccess(), False, [], fenced=True) == ["memory_search", "memory_get", "cron"]    # a chat-only role
     assert "write" in openclaw._tool_allowlist(ToolAccess(), False, [], fenced=False)     # no folder: it keeps the memory files
     assert "keeps" not in openclaw.agents_md(Path("/m"), writable=False) and "cannot edit" in openclaw.agents_md(Path("/m"), writable=False)
 

@@ -300,7 +300,7 @@ def _tool_allowlist(tools: Any, web_search: bool, connectors: list[str], fenced:
     Without a project folder (`fenced` False) every agent gets read/write/edit: its only files are the shared memory files, so
     it can keep them. Fenced to a project folder, it gets exactly the file tools the role has. memory_search/memory_get always."""
     allowed = ["web_search"] if web_search else []
-    allowed += [f"{name}__*" for name in connectors] + ["memory_search", "memory_get"]
+    allowed += [f"{name}__*" for name in connectors] + ["memory_search", "memory_get", "cron"]   # cron = OpenClaw's reminder/scheduler tool
     if not fenced or getattr(tools, "read", "off") != "off":
         allowed.append("read")
     if not fenced or getattr(tools, "write", "off") != "off":

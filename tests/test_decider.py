@@ -111,3 +111,13 @@ def test_the_decider_is_told_what_each_agents_skills_do(monkeypatch):
     res = decider.decide("hi", roles, get_settings(), skills={"b": "slides (makes decks)"})
     assert res.role.id == "b"
     assert seen["questions"]["role"]["criteria"] == {"a": "chat", "b": "write Its skills: slides (makes decks)"}
+
+
+def test_an_at_mention_picks_the_role_without_the_decider(monkeypatch):
+    monkeypatch.setattr(http.urllib.request, "urlopen", lambda *a, **k: pytest.fail("decider called"))
+    roles = list(DEFAULT_ROLES)
+    first, second = roles[0], roles[1]
+    got = decider.decide(f"hey @{second.name.upper()} please help", roles, get_settings())
+    assert (got.role.id, got.source) == (second.id, "mention")
+    assert decider.mentioned_role(f"mail me@{first.name}x.com", roles) is None     # not a whole word
+    assert decider.mentioned_role("no mention here", roles) is None

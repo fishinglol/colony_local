@@ -20,7 +20,21 @@ logger = logging.getLogger(__name__)
 class DeciderResult:
     role: Role
     confidence: float   # the decider's confidence for the chosen role (0–1)
-    source: str         # "jev" | "laya" | "nemotron" | "direct" | "only_role" | "fallback"
+    source: str         # "jev" | "laya" | "nemotron" | "direct" | "mention" | "only_role" | "fallback"
+
+
+def mentioned_role(message: str, roles: list[Role]) -> Role | None:
+    """The role named after an "@" in the message ("@Coder fix this", by name or id, any case); the first mention wins."""
+    text = message.lower()
+    at = text.find("@")
+    while at != -1:
+        rest = text[at + 1:]
+        found = [(len(key), r) for r in roles for key in (r.name.lower(), r.id.lower())
+                 if key and rest.startswith(key) and (len(rest) == len(key) or not rest[len(key)].isalnum())]
+        if found:
+            return max(found, key=lambda f: f[0])[1]
+        at = text.find("@", at + 1)
+    return None
 
 
 def decide(message: str, roles: list[Role], settings: Settings, direct_role: Role | None = None,
@@ -29,6 +43,7 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
 
     direct_role set (user messaged a role directly) → no decision.
     One role only → no decision to make.
+    "@Name" in the message → that role answers.
     Any decider failure → first role, source="fallback" (shown in the UI).
     `skills` maps a role id to a line about what its skills do; it is added to that role's criterion.
     """
@@ -37,6 +52,8 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
         return DeciderResult(role=direct_role, confidence=1.0, source="direct")
     if len(roles) == 1:
         return DeciderResult(role=roles[0], confidence=1.0, source="only_role")
+    if named := mentioned_role(message, roles):      # "@Coder …": the user picked, nothing to decide
+        return DeciderResult(role=named, confidence=1.0, source="mention")
     # An explicit User-Agent: Cloudflare in front of BeatAPI rejects urllib's default one (403, error 1010).
     json_header = {"Content-Type": "application/json", "User-Agent": "colony-local"}
     endpoints = []   # tried in order; the first that answers wins
