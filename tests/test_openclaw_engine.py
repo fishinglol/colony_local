@@ -448,6 +448,15 @@ def test_gateway_is_prepared_when_its_log_has_no_recent_preparing_line(tmp_path)
     assert openclaw.gateway_prepared(settings, tmp_path / "missing.log") is True    # a Gateway Colony did not start
 
 
+def test_gateway_is_prepared_after_recovery_line_even_if_a_colored_preparing_line_has_no_timestamp(tmp_path):
+    settings = Settings()
+    log = tmp_path / "gateway.log"
+    log.write_text(
+        "\x1b[33mSessions remain unavailable until background inspection and preparation finish.\x1b[39m\n"
+        "\x1b[90m2026-10-12T10:09:10.588+08:00\x1b[39m [state/agent-admission] agent database recovered after background inspection and preparation\n")
+    assert openclaw.gateway_prepared(settings, log) is True
+
+
 def test_a_turn_waits_for_the_gateway_to_finish_preparing(monkeypatch, tmp_path):
     settings = Settings(data_dir=tmp_path)
     states = iter([False, True])

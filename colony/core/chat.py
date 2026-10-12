@@ -17,6 +17,7 @@ from . import attachments, mcp
 from .agents import Role, ToolAccess, apply_mode
 from .context import drop_commands, labelled_history, strip_self_label
 from .decider import decide
+from .memory_keep import keep_if_worth
 from .errors import explain
 from ..llm.ollama import OLLAMA_CLOUD_MODELS, is_ollama, normalize_ollama_model_id
 from .project_folder import project_folder
@@ -169,9 +170,10 @@ def handle_message(request: MessageRequest) -> MessageResponse:
                 model=role.model, created_at=_now(), **meta,
             )
 
-    # ── 4. "Remember this": the agent writes the memory files; if it didn't, Colony keeps the user's own words ─────
+    # ── 4. Memory: the agent may have written the files; if not, Colony keeps what Jev says is worth keeping ─────
     reply_text = strip_self_label(reply_text, role.name)
-    memory_saved = bool(openclaw_session and openclaw.keep_if_asked(settings, workspace_id, text, memory_before))
+    memory_saved = bool(openclaw_session and not openclaw.memory_writable(tools, folder)      # a writing agent keeps its own memory
+                        and keep_if_worth(settings, workspace_id, text, memory_before))
     reply_text += _actions_line(actions)
 
     steps, worked_s = take_steps(workspace_id, role.id), round(time.monotonic() - started, 1)

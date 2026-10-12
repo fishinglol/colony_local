@@ -4,7 +4,7 @@ _Compact changelog, newest first. Details of "how" live in `systemPatterns.md` /
 ## 2026-10-11/12 — Coucou ↔ Gateway directly, skills, native permissions
 - **Skills per agent**: folders under the agent's workspace, allowlist in OpenClaw config, gate allows reading them, decider sees them; Settings → Skills (folder, GitHub, remove); agents can install from chat.
 - **Gateway client** (`GatewayClient.swift`): WebSocket + device identity; direct chat for agent rooms and `# mix` (decider in `prepare`), live status, tool steps, native approvals, "/" command menu, image/PDF attachments. Colony endpoints `/api/turns/prepare|finish`.
-- **Native permissions**: session `cwd` + `permissionMode` fence by OpenClaw, colony-gate skipped for `:native-` sessions; memory writes inside a project folder handled by Colony (`keep_if_asked`).
+- **Native permissions**: session `cwd` + `permissionMode` fence by OpenClaw, colony-gate skipped for `:native-` sessions; memory writes inside a project folder handled by Colony (`memory_keep.keep_if_worth`).
 - New workspaces get their own project folder; 3 old workspaces and the empty `my-business` folder deleted at the owner's request; test sessions/devices cleaned.
 - Fixes found on the way: slash-command replies polluted team context (`drop_commands`), Keychain prompt hangs unsigned test binaries, Gateway handshake resets for ~2.5 min after restart.
 

@@ -37,6 +37,33 @@ def mentioned_role(message: str, roles: list[Role]) -> Role | None:
     return None
 
 
+def ask_choice(settings: Settings, message: str, instructions: str, criteria: dict[str, str], valid: list[str] | None = None,
+               question: str = "role") -> tuple[str, float, str] | None:
+    """Put one choice question to Jev's API, then to Laya (same protocol): (choice, confidence, source) from the first that
+    answers, or None. `criteria` maps each option to when it applies; `valid` are the options accepted (default: all)."""
+    # An explicit User-Agent: Cloudflare in front of BeatAPI rejects urllib's default one (403, error 1010).
+    json_header = {"Content-Type": "application/json", "User-Agent": "colony-local"}
+    endpoints = []   # tried in order; the first that answers wins
+    if settings.jev_api_key:
+        endpoints.append((f"{settings.jev_url.rstrip('/')}/v1/systemone",
+                          {**json_header, "Authorization": f"Bearer {settings.jev_api_key}"}, settings.jev_model, "jev"))
+    if settings.laya_url:
+        # Laya speaks Jev's protocol; "multilingual" is its checkpoint that reads Thai.
+        endpoints.append((f"{settings.laya_url}/v1/systemone", json_header, "multilingual", "laya"))
+    for url, headers, model, source in endpoints:
+        payload = {"model": model, "state": {"message": message},
+                   "questions": {question: {"type": "choice", "instructions": instructions, "criteria": criteria}}}
+        try:
+            # retries=0: this sits on the hot path of every message, so fail fast and try the next one.
+            data = post_json(url, payload, headers, timeout=10.0, provider_name=source.capitalize(), retries=0)
+            choice, confidence = parse_jev_answer(data, valid or list(criteria), question)
+        except (ProviderError, KeyError, ValueError, TypeError) as exc:
+            logger.warning("%s answer failed (%s)", source, exc)   # never logs the key: only the error
+            continue
+        return choice, confidence, source
+    return None
+
+
 def decide(message: str, roles: list[Role], settings: Settings, direct_role: Role | None = None,
            skills: dict[str, str] | None = None) -> DeciderResult:
     """Pick which role answers.
@@ -54,37 +81,10 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
         return DeciderResult(role=roles[0], confidence=1.0, source="only_role")
     if named := mentioned_role(message, roles):      # "@Coder …": the user picked, nothing to decide
         return DeciderResult(role=named, confidence=1.0, source="mention")
-    # An explicit User-Agent: Cloudflare in front of BeatAPI rejects urllib's default one (403, error 1010).
-    json_header = {"Content-Type": "application/json", "User-Agent": "colony-local"}
-    endpoints = []   # tried in order; the first that answers wins
-    if settings.jev_api_key:
-        endpoints.append((f"{settings.jev_url.rstrip('/')}/v1/systemone",
-                          {**json_header, "Authorization": f"Bearer {settings.jev_api_key}"}, settings.jev_model, "jev"))
-    if settings.laya_url:
-        # Laya speaks Jev's protocol; "multilingual" is its checkpoint that reads Thai.
-        endpoints.append((f"{settings.laya_url}/v1/systemone", json_header, "multilingual", "laya"))
-
-    for url, headers, model, source in endpoints:
-        payload = {
-            "model": model,
-            "state": {"message": message[:2000]},
-            "questions": {
-                "role": {
-                    "type": "choice",
-                    "instructions": "Which teammate should answer this message?",
-                    "criteria": when,
-                }
-            },
-        }
-        try:
-            # retries=0: the decider sits on the hot path of every message, so fail fast and try the next one.
-            data = post_json(url, payload, headers, timeout=10.0, provider_name=source.capitalize(), retries=0)
-            role_id, confidence = parse_jev_answer(data, [r.id for r in roles])
-        except (ProviderError, KeyError, ValueError, TypeError) as exc:
-            logger.warning("%s decider failed (%s)", source, exc)   # never logs the key: only the error
-            continue
-        role = next(r for r in roles if r.id == role_id)
-        return DeciderResult(role=role, confidence=confidence, source=source)
+    asked = ask_choice(settings, message[:2000], "Which teammate should answer this message?", when, [r.id for r in roles])
+    if asked:
+        choice, confidence, source = asked
+        return DeciderResult(role=next(r for r in roles if r.id == choice), confidence=confidence, source=source)
 
     # No endpoint set or none answered (Jev's free tier answers once a minute): ask nemotron before giving up,
     # so a rate limit doesn't silently hand every message to the first agent.
@@ -95,9 +95,9 @@ def decide(message: str, roles: list[Role], settings: Settings, direct_role: Rol
     return DeciderResult(role=roles[0], confidence=0.0, source="fallback")
 
 
-def parse_jev_answer(data: dict, role_ids: list[str]) -> tuple[str, float]:
-    """Return (role_id, confidence) from a Decisions API response."""
-    answer = (data.get("answers") or {}).get("role") or {}
+def parse_jev_answer(data: dict, role_ids: list[str], question: str = "role") -> tuple[str, float]:
+    """Return (choice, confidence) for one question from a Decisions API response."""
+    answer = (data.get("answers") or {}).get(question) or {}
     choice = answer.get("choice")
     if choice not in role_ids:
         raise ValueError(f"Jev returned no valid role: {data}")

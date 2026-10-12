@@ -88,11 +88,28 @@ def test_memory_is_kept_per_workspace(monkeypatch):
     assert "closes at 5pm" not in client.get("/api/memory/context?workspace_id=local").json()["context"]
 
 
-def test_an_explicit_remember_request_is_kept_even_if_the_agent_wrote_nothing(monkeypatch):
+def test_an_agent_that_cannot_write_its_memory_gets_what_jev_says_is_worth_keeping(monkeypatch):
+    from colony.core import memory_keep
     live(monkeypatch)
-    body = client.post("/api/messages", json={"message": "remember my dog is Kaprao", "role_id": "chitchat"}).json()
+    monkeypatch.setattr(memory_keep, "ask_choice", lambda *a, **k: ("about_user", 0.9, "jev"))
+    shop = make("Shop")
+    assert shop["folder"]       # a project folder: the memory lives inside it, so a role needs file tools to write it
+    roles = client.get(f"/api/roles?workspace_id={shop['id']}").json()["roles"]
+    for role in roles:
+        role["tools"]["write"] = "off"
+    client.put(f"/api/roles?workspace_id={shop['id']}", json={"roles": roles})
+    body = client.post("/api/messages", json={"message": "my dog is Kaprao", "workspace_id": shop["id"], "role_id": "chitchat"}).json()
     assert body["memory_saved"] is True
-    assert "Kaprao" in client.get("/api/memory/context").json()["context"]
+    assert "Kaprao" in client.get(f"/api/memory/context?workspace_id={shop['id']}").json()["context"]
+    assert (openclaw.memory_dir(get_settings(), shop["id"]).parent == __import__("pathlib").Path(shop["folder"]))   # <folder>/.colony
+
+
+def test_an_agent_that_can_write_its_memory_never_costs_a_jev_call(monkeypatch):
+    from colony.core import memory_keep
+    live(monkeypatch)
+    monkeypatch.setattr(memory_keep, "ask_choice", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Jev was asked")))
+    body = client.post("/api/messages", json={"message": "my dog is Kaprao", "role_id": "chitchat"}).json()
+    assert body["memory_saved"] is False
 
 
 def test_project_folder_is_checked_and_never_the_whole_disk(tmp_path):
@@ -112,7 +129,7 @@ def test_rename_and_delete_a_workspace_with_its_conversation_memory_and_openclaw
     shop = make("Shop")
     assert client.patch(f"/api/workspaces/{shop['id']}", json={"name": "  Coffee   shop "}).json()["name"] == "Coffee shop"
     client.post("/api/messages", json={"message": "remember a fact", "workspace_id": shop["id"], "role_id": "chitchat"})
-    memory_dir = get_settings().data_dir / "self_improve" / shop["id"]
+    memory_dir = openclaw.memory_dir(get_settings(), shop["id"])      # <project folder>/.colony
     assert memory_dir.exists()
     mine, other = openclaw.agent_id_for(shop["id"], "chitchat"), openclaw.agent_id_for("local", "chitchat")
     agent_dir = openclaw.config_path().parent / "agents" / mine
@@ -120,7 +137,7 @@ def test_rename_and_delete_a_workspace_with_its_conversation_memory_and_openclaw
     openclaw.write_config({"agents": {"entries": {"main": {}, mine: {"name": "Buddy"}, other: {"name": "Buddy"}}}})
 
     assert client.delete(f"/api/workspaces/{shop['id']}").status_code == 200
-    assert not memory_dir.exists() and not agent_dir.exists()
+    assert not agent_dir.exists() and memory_dir.exists()      # the project folder (and the memory in it) is never deleted
     assert set(openclaw.read_config()["agents"]["entries"]) == {"main", other}      # only that workspace's agents went
     assert client.get(f"/api/workspaces/{shop['id']}/messages").status_code == 404
     assert client.post("/api/messages", json={"message": "hi", "workspace_id": shop["id"]}).status_code == 404

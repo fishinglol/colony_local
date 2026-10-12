@@ -108,8 +108,32 @@ def agent_id_for(workspace_id: str, role_id: str) -> str:
 
 def memory_dir(settings: Settings, workspace_id: str) -> Path:
     """The OpenClaw workspace shared by every agent of one Colony workspace. Its MEMORY.md, USER.md and memory/YYYY-MM-DD.md
-    are the team's memory: every agent searches them (extraPaths) and writes them, and Colony's Memory window just shows them."""
-    return settings.data_dir / "self_improve" / workspace_id
+    are the team's memory: every agent searches them (extraPaths) and writes them, and Colony's Memory window just shows them.
+    With a project folder it is `<folder>/.colony/`: the agents are fenced to that folder, so only there can they write it
+    (git-ignored by its own .gitignore; the old copy under ~/.colony/self_improve is copied in once)."""
+    from ..core.project_folder import project_folder      # lazy: core.workspaces imports this module
+    from ..core.workspaces import WorkspaceNotFound, get_workspace
+    legacy = settings.data_dir / "self_improve" / workspace_id
+    try:
+        folder, _ = project_folder(get_workspace(workspace_id).folder)
+    except WorkspaceNotFound:
+        folder = None
+    if folder is None:
+        return legacy
+    mine = folder / ".colony"
+    if not mine.exists():
+        if legacy.is_dir():
+            shutil.copytree(legacy, mine)
+        else:
+            mine.mkdir(parents=True, exist_ok=True)
+        (mine / ".gitignore").write_text("*\n", encoding="utf-8")
+    return mine
+
+
+def memory_writable(tools: Any, folder: Any) -> bool:
+    """Can this agent write the memory files itself? Without a project folder they are its whole root; with one they sit inside
+    it, so it needs the role's read and write tools."""
+    return not folder or (getattr(tools, "write", "off") != "off" and getattr(tools, "read", "off") != "off")
 
 
 def agent_dir(settings: Settings, agent_id: str) -> Path:
@@ -207,8 +231,8 @@ def remove_skill(settings: Settings, agent_id: str, folder: str) -> bool:
 
 def agents_md(memory: Path, writable: bool = True) -> str:
     """AGENTS.md of an agent: how the team's shared memory works. OpenClaw reads it into the session's first turn.
-    `writable` is False when the agent is fenced to a project folder: the memory files are outside it, so Colony keeps what
-    the user asks to be remembered and the agent only searches them."""
+    `writable` is False when the role has no file tools inside its project folder (see memory_writable): Colony then keeps
+    what is worth remembering (core/memory_keep.py) and the agent only searches them."""
     if writable:
         keeping = f"""The folder {memory} is the team's shared memory: plain files every teammate reads and writes, with the read, write and edit tools,
 always allowed for these files. Use absolute paths, and write there (not in this workspace).
@@ -216,14 +240,17 @@ always allowed for these files. Use absolute paths, and write there (not in this
 - USER.md in your own workspace is only a copy of the shared one, made before each turn.
 
 ## Keeping things
-For every user message decide whether it holds a lasting fact worth keeping (name, preference, pet, decision, project detail).
-If it does, your first action is a tool call: edit {memory}/USER.md for facts about the user, {memory}/MEMORY.md for anything else
-(read the file first, keep existing lines, add one short line). After the tool result, confirm briefly.
-Never say you saved something unless that tool call succeeded."""
+After each user message decide whether it holds a lasting fact worth keeping (name, preference, pet, decision, project detail),
+not small talk, questions or one-off tasks. When the user asks you to remember something, or confirms a fact you just stated
+("yes, remember that"), keep the fact itself, not their "yes". If it is worth keeping:
+1. Read {memory}/USER.md (facts about the user) or {memory}/MEMORY.md (everything else) first.
+2. Is it new or old? If the file already says it, write nothing. If it changes or contradicts an older line (moved city,
+   new job, changed mind), edit that line in place; never leave both. If it is new, add one short line.
+3. Your first action is that tool call. After it succeeds, confirm briefly. Never say you saved something unless it succeeded."""
     else:
-        keeping = f"""The folder {memory} is the team's shared memory (MEMORY.md, USER.md, memory/YYYY-MM-DD.md). You are fenced to the project
-folder, so you cannot edit those files. When the user asks you to remember something, Colony writes it there for you:
-just confirm briefly. Do not try to write those files yourself."""
+        keeping = f"""The folder {memory} is the team's shared memory (MEMORY.md, USER.md, memory/YYYY-MM-DD.md). Your role has no read and
+write tools for the project folder, so you cannot edit those files. Colony itself saves what is worth saving from the user's messages (their name, preferences,
+decisions) in them after your reply. Do not try to write those files yourself, and do not claim you wrote them: you may say you will remember it."""
     return f"""# Team memory (managed by Colony)
 {keeping}
 
@@ -273,7 +300,6 @@ def write_agent_files(settings: Settings, workspace_id: str, agent_id: str, name
 
 
 MAX_IMAGES = 8      # the Gateway's limit of image_url parts per request
-REMEMBER_WORDS = ("จำไว้", "จำด้วย", "remember")     # an explicit "keep this" request, in Thai or English
 
 
 def snapshot_memory(settings: Settings, workspace_id: str) -> str:
@@ -281,18 +307,6 @@ def snapshot_memory(settings: Settings, workspace_id: str) -> str:
     folder = memory_dir(settings, workspace_id)
     _seed_memory_dir(folder)      # so creating the starter files is never mistaken for a change
     return "".join((folder / name).read_text(encoding="utf-8") if (folder / name).exists() else "" for name in ("MEMORY.md", "USER.md"))
-
-
-def keep_if_asked(settings: Settings, workspace_id: str, user_text: str, before: str) -> bool:
-    """The model decides what to write into the memory files and does not always (measured: it saved about half of the explicit
-    "remember this" requests and still said "saved"). So when the user explicitly asked and nothing changed, Colony adds their own
-    words to USER.md. True when it did."""
-    if not any(word in user_text.lower() for word in REMEMBER_WORDS) or snapshot_memory(settings, workspace_id) != before:
-        return False
-    notes = memory_dir(settings, workspace_id) / "USER.md"
-    with notes.open("a", encoding="utf-8") as f:
-        f.write(f"- {user_text.strip()[:400]}\n")
-    return True
 
 
 def _tool_allowlist(tools: Any, web_search: bool, connectors: list[str], fenced: bool = False, skills: bool = False) -> list[str]:
@@ -497,6 +511,7 @@ def remove_agents(settings: Settings, workspace_id: str) -> None:
 
 
 GATEWAY_LOG = Path.home() / ".colony" / "openclaw.log"      # where `colony` sends the Gateway's output (cli.py)
+_PREPARED = "agent database recovered after background inspection and preparation"
 _PREPARING = ("startup preparation still running", "remains degraded", "Sessions remain unavailable")
 
 
@@ -510,9 +525,12 @@ def gateway_prepared(settings: Settings, log: Path | None = None, now: float | N
         return True         # a Gateway not started by Colony: nothing to look at
     now = time.time() if now is None else now
     for line in reversed(lines):
+        if _PREPARED in line:
+            return True                 # newer than any "still preparing" line above it
         if any(mark in line for mark in _PREPARING):
+            text = line[line.index("m") + 1:] if line.startswith("\x1b") else line    # the log is colored
             try:
-                return now - datetime.fromisoformat(line[:29]).timestamp() > 75
+                return now - datetime.fromisoformat(text[:29]).timestamp() > 75
             except ValueError:
                 return False
     return True
@@ -754,7 +772,7 @@ def run_openclaw_turn(
     ensure_agent(settings, agent_id, role_name, tools=tools, web_search=web_search, connectors=connectors,
                  folder=str(folder) if folder else None, memory=memory, thinking=reasoning)
     model = f"openclaw/{agent_id}"
-    persona = write_agent_files(settings, workspace_id, agent_id, role_name, role_instructions, memory_writable=not folder)
+    persona = write_agent_files(settings, workspace_id, agent_id, role_name, role_instructions, memory_writable=memory_writable(tools, folder))
     session_user = build_session_user(workspace_id, role_id, channel, persona)
 
     # Assemble messages

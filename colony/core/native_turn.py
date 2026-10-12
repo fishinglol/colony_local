@@ -20,6 +20,7 @@ from .activity import clear_activity, set_activity, take_steps
 from .agents import Role, ToolAccess, apply_mode
 from .context import drop_commands, labelled_history, strip_self_label
 from .decider import decide
+from .memory_keep import keep_if_worth
 from .project_folder import project_folder
 from .workspaces import get_workspace
 
@@ -73,7 +74,7 @@ def prepare(request: MessageRequest) -> dict:
     openclaw.ensure_agent(settings, agent_id, role.name, tools=tools, web_search=role.web_search, connectors=connectors,
                           folder=str(folder) if folder else None, memory=memory,
                           thinking=role.reasoning if _can_think(role) else "default")
-    persona = openclaw.write_agent_files(settings, workspace.id, agent_id, role.name, role.instructions, memory_writable=not folder)
+    persona = openclaw.write_agent_files(settings, workspace.id, agent_id, role.name, role.instructions, memory_writable=openclaw.memory_writable(tools, folder))
     channel = request.channel or request.role_id or "auto"
     session_user = openclaw.build_session_user(workspace.id, role.id, channel, persona)
 
@@ -97,7 +98,8 @@ def prepare(request: MessageRequest) -> dict:
     turn_id = f"turn_{uuid4().hex}"
     _turns[turn_id] = {"workspace_id": workspace.id, "role": role, "channel": channel, "text": text, "refs": refs, "session_user": session_user,
                        "decided_by": decided_by, "confidence": confidence,
-                       "memory_before": openclaw.snapshot_memory(settings, workspace.id), "started": time.monotonic()}
+                       "memory_before": openclaw.snapshot_memory(settings, workspace.id),
+                       "agent_writes_memory": openclaw.memory_writable(tools, folder), "started": time.monotonic()}
     # The Gateway fences the session itself: to the project folder (or, with none, to the team's memory files) and, when the
     # agent may write or run commands, asks the user before commands run (guarded); otherwise it is read-only.
     can_change = tools.write != "off" or tools.bash != "off"
@@ -126,7 +128,8 @@ def finish(turn_id: str, reply: str | None, failed: bool = False) -> dict:
     if failed or not (reply or "").strip():
         return {"saved": False}
     reply_text = strip_self_label(reply, role.name)
-    memory_saved = openclaw.keep_if_asked(settings, workspace_id, turn["text"], turn["memory_before"])
+    # the agent writes the memory files itself when it can (AGENTS.md); Colony asks Jev only for agents that cannot
+    memory_saved = not turn["agent_writes_memory"] and keep_if_worth(settings, workspace_id, turn["text"], turn["memory_before"])
     meta = {"channel": turn["channel"], "role_id": role.id, "role_name": role.name, "decided_by": turn["decided_by"],
             "confidence": turn["confidence"],
             "steps": steps, "worked_s": round(time.monotonic() - turn["started"], 1), "thinking": None}

@@ -8,7 +8,7 @@ Coucou (แอป Swift ใน `coco_local/`) คุยกับ OpenClaw Gatewa
 | เรื่อง | ที่อยู่ในโค้ด |
 |---|---|
 | Skill ต่อ agent (เลือกโฟลเดอร์ / GitHub / ลบ / ให้ AI ติดตั้งจากแชท) | `engine/openclaw.py` (`add_skills`, `add_skills_from_github`), `api/agents.py`, แท็บ Skills ใน `ColonySettingsView.swift` |
-| ตัวเชื่อม Gateway (WebSocket + กุญแจอุปกรณ์ใน Keychain) | `coco_local/NotchBuddy/Sources/App/GatewayClient.swift` |
+| ตัวเชื่อม Gateway (WebSocket + กุญแจอุปกรณ์ใน Keychain) | `coco_local/NotchBuddy/Sources/App/Colony/GatewayClient.swift` |
 | รอบแชทแบบ native (prepare → Gateway → finish) | `colony/core/native_turn.py`, `ColonyStore.runDirect` |
 | # mix ผ่าน Gateway (decider อยู่ใน prepare) | `native_turn.prepare` |
 | สิทธิ์/รั้วโฟลเดอร์/การอนุมัติโดย OpenClaw | `sessions.create {cwd, permissionMode}`; ปลั๊กอิน `engine/colony-gate/index.ts` ข้าม session `:native-` |

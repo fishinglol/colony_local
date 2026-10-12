@@ -134,21 +134,38 @@ def test_each_agent_has_its_own_workspace_and_all_search_the_shared_memory_folde
     assert (mem / "MEMORY.md").exists() and (mem / "USER.md").exists() and (mem / "memory").is_dir()
 
 
-def test_an_explicit_remember_request_is_kept_even_when_the_model_wrote_nothing(tmp_path):
+def test_jev_decides_what_is_kept_and_where(tmp_path, monkeypatch):
     from colony.config import Settings
+    from colony.core import memory_keep
     settings = Settings(data_dir=tmp_path)
     ws = "ws_1"
-    notes = openclaw.memory_dir(settings, ws) / "USER.md"
+    folder = openclaw.memory_dir(settings, ws)
     before = openclaw.snapshot_memory(settings, ws)                    # also creates the starter files
+    answers = iter([("nothing", 0.9, "jev"), ("about_user", 0.9, "jev"), ("fact_or_decision", 0.8, "jev"), None])
+    monkeypatch.setattr(memory_keep, "ask_choice", lambda *a, **k: next(answers))
 
-    assert openclaw.keep_if_asked(settings, ws, "วันนี้อากาศดีจัง", before) is False          # small talk is not kept
-    assert openclaw.keep_if_asked(settings, ws, "ช่วยจำไว้ให้หน่อย: ฉันชื่อสมชาย", before) is True
-    assert "ฉันชื่อสมชาย" in notes.read_text(encoding="utf-8")
-
+    assert memory_keep.keep_if_worth(settings, ws, "วันนี้อากาศดีจัง", before) is False            # Jev: nothing worth keeping
+    assert memory_keep.keep_if_worth(settings, ws, "my name is Fais", before) is True
+    assert "- my name is Fais" in (folder / "USER.md").read_text(encoding="utf-8")
+    before = openclaw.snapshot_memory(settings, ws)                    # every turn takes a fresh snapshot
+    assert memory_keep.keep_if_worth(settings, ws, "we deploy on Fridays only", before) is True
+    assert "we deploy on Fridays only" in (folder / "MEMORY.md").read_text(encoding="utf-8")
     before = openclaw.snapshot_memory(settings, ws)
-    notes.write_text(notes.read_text(encoding="utf-8") + "- ชื่อ: สมชาย\n", encoding="utf-8")   # this time the model wrote it itself
-    assert openclaw.keep_if_asked(settings, ws, "remember that my dog is Mochi", before) is False
-    assert notes.read_text(encoding="utf-8").count("\n") == 3          # nothing was added on top of the model's own note
+    assert memory_keep.keep_if_worth(settings, ws, "ฉันชอบกาแฟดำ", before) is False                  # Jev unreachable: nothing written
+
+    from colony.store.history import append_exchange
+    append_exchange(conversation_id=ws, user_message="where am I from? guess", attachments=[],
+                    assistant_response={"reply": "You are from Thailand, right?", "model": "m"}, channel="chat")
+    answers2 = iter([("confirms_assistant", 0.9, "jev")])
+    monkeypatch.setattr(memory_keep, "ask_choice", lambda *a, **k: next(answers2))
+    before = openclaw.snapshot_memory(settings, ws)
+    assert memory_keep.keep_if_worth(settings, ws, "yes, remember it", before) is True       # what it confirmed is kept, not "yes"
+    assert "You are from Thailand, right? (user: yes, remember it)" in (folder / "USER.md").read_text(encoding="utf-8")
+
+    notes = folder / "USER.md"
+    before = openclaw.snapshot_memory(settings, ws)
+    notes.write_text(notes.read_text(encoding="utf-8") + "- ชื่อ: Fais\n", encoding="utf-8")        # the model wrote it itself this turn
+    assert memory_keep.keep_if_worth(settings, ws, "my dog is Mochi", before) is False             # (never asks Jev: files changed)
 
 
 def test_memory_search_is_allowed_for_every_agent_and_set_up_keyword_only():
@@ -196,3 +213,23 @@ def test_installing_a_skill_by_chat_asks_the_user_for_every_file(tmp_path, answe
     assert ask(agent, "read", path=str(tmp_path.parent / "elsewhere" / "secret.txt"))["allow"] is False   # not a skill folder
     answers.reply = False
     assert ask(agent, "write", path=str(mine), content="x")["allow"] is False        # "no" is respected
+
+
+def test_memory_lives_inside_the_project_folder_and_the_old_copy_is_moved_in_once(tmp_path, monkeypatch):
+    from colony.config import Settings
+    from colony.core import workspaces
+    from colony.core.workspaces import Workspace
+    settings = Settings(data_dir=tmp_path / "data")
+    project = tmp_path / "proj"
+    project.mkdir()
+    legacy = tmp_path / "data" / "self_improve" / "ws_9"
+    legacy.mkdir(parents=True)
+    (legacy / "USER.md").write_text("# User\n- name: Fais\n", encoding="utf-8")
+    monkeypatch.setattr(workspaces, "get_workspace", lambda wid: Workspace(id=wid, name="n", folder=str(project), roles=[], created_at="x"))
+
+    mem = openclaw.memory_dir(settings, "ws_9")
+    assert mem == project.resolve() / ".colony"
+    assert "name: Fais" in (mem / "USER.md").read_text(encoding="utf-8")                # copied from the old place
+    assert (mem / ".gitignore").read_text(encoding="utf-8") == "*\n"
+    (mem / "USER.md").write_text("# User\n- name: Fais\n- city: Bangkok\n", encoding="utf-8")
+    assert "Bangkok" in (openclaw.memory_dir(settings, "ws_9") / "USER.md").read_text(encoding="utf-8")   # not copied over again
