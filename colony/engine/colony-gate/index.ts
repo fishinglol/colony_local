@@ -9,7 +9,7 @@
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-const FREE = new Set(["web_search", "memory_search", "memory_get"]);   // read-only, and only over the agent's own memory folder
+const FREE = new Set(["web_search", "web_fetch", "memory_search", "memory_get"]);   // read-only, and only over the agent's own memory folder
 const OWN = "main";   // the Gateway's own default agent is the user's, not Colony's: never gated, so OpenClaw works without Colony too
 
 /** Sessions the app opens straight on the Gateway ("native-..."): the Gateway's own permission mode, project-folder fence and

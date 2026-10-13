@@ -5,6 +5,7 @@ wants to see: what it was, the command or path, a bounded piece of the output, w
 """
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 OUTPUT_LIMIT = 3000
 
@@ -28,6 +29,34 @@ def _text(result: Any) -> str:
         return json.dumps(result, ensure_ascii=False, indent=1)
     except (TypeError, ValueError):
         return str(result)
+
+
+def _clean(value: Any) -> str:
+    """Web results arrive wrapped in <<<EXTERNAL_UNTRUSTED_CONTENT>>> / "Source: Web Search" / "---" lines: keep only the text."""
+    lines = str(value or "").splitlines()
+    return " ".join(l.strip() for l in lines if l.strip() and not l.startswith(("<<<", "Source:")) and l.strip() != "---")
+
+
+def _sources(tool: str, params: dict, text: str) -> list[dict]:
+    """The pages a web tool really returned: [{title, url, site, snippet}], so the chat can show what was read."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    if tool == "web_fetch":
+        found = [{"title": data.get("title"), "url": params.get("url") or data.get("url")}]
+    else:
+        found = [r for r in data.get("results") or [] if isinstance(r, dict)]
+    out = []
+    for r in found:
+        url = str(r.get("url") or "")
+        if urlparse(url).scheme not in ("http", "https"):
+            continue
+        host = urlparse(url).netloc
+        out.append({"title": _clean(r.get("title")) or host, "url": url, "site": _clean(r.get("siteName")) or host,
+                    "snippet": _clean(r.get("snippet"))[:300]})
+    return out
 
 
 def _where(params: dict) -> str:
@@ -58,11 +87,16 @@ def describe(tool: str, params: dict | None, result: Any = None, error: str | No
         kind, title, detail = "memory", "Read memory", _where(params)
     elif tool == "web_search":
         kind, title, detail = "web", "Searched the web", str(params.get("query") or "")
+    elif tool == "web_fetch":
+        kind, title, detail = "web", "Opened a page", str(params.get("url") or "")
     elif "__" in tool:
         server, _, name = tool.partition("__")
         kind, title, detail = "connector", f"Used {server}", name
     else:
         detail = json.dumps(params, ensure_ascii=False)[:200] if params else ""
     output = (error or _text(result)).strip()
-    return {"tool": tool, "kind": kind, "title": title, "detail": detail[:600], "output": output[:OUTPUT_LIMIT],
+    step = {"tool": tool, "kind": kind, "title": title, "detail": detail[:600], "output": output[:OUTPUT_LIMIT],
             "ok": not error, "ms": ms}
+    if kind == "web" and not error:
+        step["sources"] = _sources(tool, params, output)      # parsed before the output is cut at OUTPUT_LIMIT
+    return step

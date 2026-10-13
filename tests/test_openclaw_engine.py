@@ -185,7 +185,7 @@ def test_each_role_gets_its_own_openclaw_agent_added_to_the_config(monkeypatch, 
     assert cfg["agents"]["entries"]["ws_1-coder"]["workspace"].startswith(str(tmp_path))   # never the user's project
     assert cfg["tools"] == {"profile": "full"}                  # the rest of the config is untouched
     entry = cfg["agents"]["entries"]["ws_1-coder"]              # lean: only the tools the role has (46k -> ~5k tokens)
-    assert entry["tools"] == {"profile": "minimal", "alsoAllow": ["web_search", "memory_search", "memory_get", "cron", "read", "write", "edit", "exec"]}
+    assert entry["tools"] == {"profile": "minimal", "alsoAllow": ["web_search", "web_fetch", "memory_search", "memory_get", "cron", "read", "write", "edit", "exec"]}
     assert entry["skills"] == [] and entry["contextInjection"] == "continuation-skip"
 
     openclaw.ensure_agent(settings, "ws_1-coder", "Coder", tools=ToolAccess(), web_search=False)   # the user turned tools off

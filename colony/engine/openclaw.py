@@ -313,7 +313,7 @@ def _tool_allowlist(tools: Any, web_search: bool, connectors: list[str], fenced:
     """OpenClaw tool names for what the Colony role switched on. A connector's tools are named <server>__<tool>.
     Without a project folder (`fenced` False) every agent gets read/write/edit: its only files are the shared memory files, so
     it can keep them. Fenced to a project folder, it gets exactly the file tools the role has. memory_search/memory_get always."""
-    allowed = ["web_search"] if web_search else []
+    allowed = ["web_search", "web_fetch"] if web_search else []      # web_fetch = open one page (search gives only snippets)
     allowed += [f"{name}__*" for name in connectors] + ["memory_search", "memory_get", "cron"]   # cron = OpenClaw's reminder/scheduler tool
     if not fenced or getattr(tools, "read", "off") != "off":
         allowed.append("read")
@@ -703,8 +703,9 @@ def capability_text(settings: Settings, agent_id: str, role_name: str, tools: An
     """What this turn tells the agent about itself: who it is and which tools it has (the system part of a turn)."""
     cap_lines = []
     if web_search:
-        cap_lines.append("- Web search: ENABLED (tool `web_search`). You have no live data: for prices, news, weather or anything recent, "
-                         "call it first and never answer from memory.")
+        cap_lines.append("- Web search: ENABLED (tools `web_search`, and `web_fetch` to open a page you have the URL of). You have no live data: "
+                         "for prices, news, weather or anything recent, call it first and never answer from memory. "
+                         "When the user gives a link, open it with `web_fetch`. After a tool answers, always reply in plain words.")
     else:
         cap_lines.append("- Web search: DISABLED (rely on what you know and on workspace files)")
     if tools:

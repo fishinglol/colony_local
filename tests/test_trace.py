@@ -1,4 +1,6 @@
 """What an agent did in a turn: steps from OpenClaw's tool reports, shown under the reply; per-agent files for the settings window."""
+import json
+
 from fastapi.testclient import TestClient
 
 from colony.app import app
@@ -22,6 +24,17 @@ def test_steps_say_what_happened_in_plain_words():
     failed = trace.describe("exec", {"command": "false"}, None, "exit 1")
     assert failed["ok"] is False and failed["output"] == "exit 1"
     assert len(trace.describe("exec", {"command": "x"}, "y" * 10_000)["output"]) == trace.OUTPUT_LIMIT
+
+
+def test_web_steps_keep_the_pages_that_were_read():
+    wrap = lambda x: f"\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"a\">>>\nSource: Web Search\n---\n{x}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"a\">>>"
+    hit = {"title": wrap("Global SaaS Market"), "url": "https://www.kenresearch.com/saas", "snippet": wrap("USD 408 billion"), "siteName": wrap("kenresearch")}
+    body = json.dumps({"results": [hit, {"title": "no link", "url": "javascript:x"}]})
+    step = trace.describe("web_search", {"query": "saas growth"}, body)
+    assert step["sources"] == [{"title": "Global SaaS Market", "url": "https://www.kenresearch.com/saas", "site": "kenresearch", "snippet": "USD 408 billion"}]
+    page = trace.describe("web_fetch", {"url": "https://a.dev/x"}, json.dumps({"title": "A"}))
+    assert page["sources"][0]["url"] == "https://a.dev/x" and page["sources"][0]["site"] == "a.dev"
+    assert "sources" not in trace.describe("web_search", {"query": "x"}, None, "boom")
 
 
 def test_a_finished_tool_call_becomes_a_step_of_the_running_turn():

@@ -67,3 +67,15 @@ dated sections, keep each file short.
 
 
 Do not begin work without checking the memory bank.
+
+## 6. Check OpenClaw Before Building a Feature
+
+**ก่อนเขียนฟีเจอร์ใหม่ทุกครั้ง ไปดูใน OpenClaw ก่อนว่ามีอยู่แล้วหรือยัง**
+
+Colony is a thin layer on the OpenClaw Gateway; most agent features (tools, memory, sessions, cron, skills,
+approvals, MCP, compaction, plugins) already exist there. Before writing code for a new feature:
+1. Read `memory-bank/openclaw-capabilities.md`.
+2. Search the OpenClaw source `openclaw-main 2/` (tools, plugins, config keys, Gateway methods) for the feature.
+3. If OpenClaw has it: configure or call it, don't rebuild it. If not: say so, then build it.
+
+State in the reply what you found in OpenClaw (or that it has nothing).
