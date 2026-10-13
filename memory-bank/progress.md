@@ -2,7 +2,7 @@
 _Compact changelog, newest first. Details of "how" live in `systemPatterns.md` / `openclaw-capabilities.md`._
 
 ## 2026-10-13/14 — handoff in # mix, `/new` archive, native write asks
-- **Handoff between agents** in `# mix`: agents are told their teammates; a reply ending in `@Name task` runs that teammate next (role switch `accepts_handoff`, max 3 hops, enforced in Colony; stored without a fake user row). OpenClaw's `sessions_spawn` not used (see `openclaw-capabilities.md`).
+- **Handoff between agents** in `# mix`: agents are told their teammates; a reply ending in `@Name task` runs that teammate next (role switch `accepts_handoff`, max 3 hops, enforced in Colony; stored without a fake user row). One teammate per reply, in the order the request names them (prompt line; verified Coder → Thinker → Writer). OpenClaw's `sessions_spawn` not used (see `openclaw-capabilities.md`).
 - **`/new`** moves the old conversation to `~/.colony/archive/`, empties the context gauge, and no longer carries an attached window context (it made the command go to the decider).
 - **Native `write`/`edit` ask** for real: colony-gate handles file-changing and connector tools in native sessions too (the Gateway only asks before `exec`).
 - **Restart race fixed**: Colony watches a Gateway it found on the port and starts its own when it is gone.
