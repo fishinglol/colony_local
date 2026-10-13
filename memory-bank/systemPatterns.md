@@ -1,5 +1,5 @@
 # System Patterns — Colony Local
-_Architecture as it is now (2026-10-12). Paths relative to repo root._
+_Architecture as it is now (2026-10-14). Paths relative to repo root._
 
 ## 1. Layers
 `web UI / Tauri` →HTTP→ `colony/api` (thin routers) → `colony/core` (logic) → `colony/engine/openclaw.py` →HTTP→ **OpenClaw Gateway :18789** → Ollama.
@@ -23,7 +23,7 @@ core/trace.py        tool call → human step                           core/att
 core/errors.py       explain(): provider error → Thai                 core/project_folder.py, core/models.py (Ollama pool)
 engine/openclaw.py   everything that touches the Gateway/its config (see openclaw-capabilities.md)
 engine/colony-gate/  OpenClaw plugin (TS): before_tool_call → POST /api/approvals/gate; after_tool_call → POST /api/activity/tool
-llm/ollama.py        model table (context windows, tools, reasoning)    store/ history.json + sqlite mirror + JsonStore
+llm/ollama.py        model table (context windows, tools, reasoning)    store/ history.json + sqlite mirror + JsonStore (+ `history.archive_before`: `/new` moves old messages to `~/.colony/archive/<ws>/`)
 web/                 index.html, app.css, js/* (main, state, api, feed, work, sidebar, workspaces, agent-editor, model-picker, settings, tool-picker, …)
 ```
 
@@ -34,7 +34,7 @@ Ordered endpoints, first that answers wins; `retries=0`, 10 s each:
 2. **Laya** if `LAYA_URL` (model `multilingual`, reads Thai, no key).
 3. **Nemotron** via Ollama only when neither is configured. 4. First role = `fallback` (shown in UI).
 Each role's criterion also lists its skills' names/descriptions (`skills` arg, built in `chat.py`).
-`decided_by` ∈ jev | laya | nemotron | direct | mention | only_role | fallback. **`@Name`** (role name or id, any case, whole word; `mentioned_role`) in a group message picks that role with no decider call. Direct chats and single-agent teams skip the decider.
+`decided_by` ∈ jev | laya | nemotron | direct | mention | only_role | fallback. **`@Name`** (role name or id, any case, whole word; `mentioned_role`) in a group message picks that role with no decider call (a handoff, §4b, is the LAST line of an agent's reply starting with `@Name`). Direct chats and single-agent teams skip the decider.
 
 ## 4. A turn (`core/chat.py` + `engine/openclaw.py`)
 - Conversation id = workspace id. History = all non-evicted messages, labelled by speaker; OpenClaw keeps its own per-session history, so Colony sends only **unseen** messages (`unseen`/`mark_seen`, `openclaw_seen.json`).
@@ -46,9 +46,11 @@ Each role's criterion also lists its skills' names/descriptions (`skills` arg, b
 
 ## 4b. Native turn (`core/native_turn.py`, app ↔ Gateway)
 `POST /api/turns/prepare {workspace_id, message, role_id?, channel, attachments}` → `{native, turn_id, agent_id, role_id, role_name, model, session, cwd, permission_mode, message, attachments, decided_by, confidence}` or `{native:false, reason}`.
-No `role_id` = group chat: `decide()` picks (skills in the criteria). `message` = capability text + unseen team lines (slash commands dropped) + user text (+ pasted text files). `attachments` = images (`type:image`) and PDFs (`type:file`) base64 for `chat.send`.
+No `role_id` = group chat: `decide()` picks (skills in the criteria). `message` = capability text (incl. the teammate list: each other role's name + `when`, `capability_text(teammates=…)`; the agent may tell the user to `@Name` a teammate, there is no agent-to-agent handoff yet) + unseen team lines (slash commands dropped) + user text (+ pasted text files). `attachments` = images (`type:image`) and PDFs (`type:file`) base64 for `chat.send`.
 The app runs `sessions.create` (fence) → `sessions.patch` (model) → `sessions.messages.subscribe` → `chat.send`, then `POST /api/turns/finish {turn_id, reply, failed}`: strips the self label, `keep_if_worth`, steps (from the plugin's `after_tool_call`), `append_exchange`, `mark_seen`.
 Gateway wire notes: events `agent` (stream lifecycle/assistant/tool/usage), `chat` (state status/delta/final/error), `exec.approval.requested` → `exec.approval.resolve {id, decision}`; handshake needs a signed device identity (v3 payload) and the `connect.challenge` nonce/ts.
+
+**Handoff and `/new` (2026-10-14):** `prepare` with `handoff_from` (sender role id) + `hops` runs a teammate. Refused (404) unless the sender exists, the target has `accepts_handoff` and `hops <= MAX_HOPS` (3). The message is framed "[Sender hands you this task…]", `decided_by=handoff`, no `keep_if_worth`. `finish` detects a handoff (`_handoff`: LAST line `@Name task`, name or id, not itself) and returns `{handoff: {role_id, role_name, message, from, hops}}` while `hops < 3`; a handoff reply is stored with no user row (`append_exchange(user_message=None)`, metadata `handed_by`). A saved command whose first word is `/new` archives everything before it (`archive_before(keep_last=2)`) and empties the agents' usage gauge (`openclaw.forget_usage`). The app loops prepare → Gateway → finish while `finish` returns a handoff.
 
 ## 5. Memory (OpenClaw's design, Colony only provides folders)
 Shared per workspace: `<project folder>/.colony/` (no folder: `~/.colony/self_improve/<ws>/`): `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`. Per agent `~/.colony/openclaw-agents/<agent_id>/`: `AGENTS.md` (rules + absolute paths),
@@ -58,7 +60,7 @@ the user's own sentence is appended to USER.md / MEMORY.md; the model alone save
 
 ## 6. Tools & approvals
 Per-agent `ToolAccess` (read off|allow, write/bash/mcp off|ask|allow) + `web_search`; workspace **mode** (`apply_mode`) can only restrict. Enforcement is the **colony-gate** plugin inside OpenClaw:
-Colony `gate.decide` applies permissions + mode + project-folder fence (symlink-safe), shows an approval card for "ask", blocks until answered. Colony unreachable = blocked (fail closed). **It no longer runs for native sessions** (`:native-` in the session key): there OpenClaw's session permission mode + `sessionRoot` fence + native approvals decide (§4b, activeContext). It still guards the HTTP fallback.
+Colony `gate.decide` applies permissions + mode + project-folder fence (symlink-safe), shows an approval card for "ask", blocks until answered. Colony unreachable = blocked (fail closed). **In native sessions (`:native-` in the session key) it only handles `write`/`edit`/`apply_patch` and connector tools** (the request carries `native: true`; a chat-only team's memory-folder writes pass): OpenClaw's session permission mode + `sessionRoot` fence + native approvals decide the rest (§4b, activeContext), because the Gateway only asks before `exec`. It guards everything in the HTTP fallback.
 Gate bypasses: `web_search`, `memory_search/get`, `skills_read`, reads under the agent's own `skills/`, memory-folder reads/writes and the Gateway's own `main` agent bypass. MCP connectors live in OpenClaw `mcp.servers` (`<server>__*` allowlist per role).
 
 **Skills** are per agent: folders with `SKILL.md` in `openclaw-agents/<agent>/skills/` (`engine/openclaw.py::add_skills/list_skills/remove_skill`; API `GET|POST /api/roles/{id}/skills`, `DELETE …/{folder}`).
@@ -77,6 +79,7 @@ Fork of open-source Coucou (MIT code, not Mochi/sounds). No agent logic, keys or
 - Files in `NotchBuddy/Sources/App/Colony/`: `ColonyService` (HTTP), `ColonyStore` (shared state, `ChatHeight`), `ColonyChatView`, `ColonyHomeView` (Team/Tools as two sliding pages: tab click or two-finger swipe; Team = `store.tasks`, Tools = `state.tasks` integration pills), `ColonySettingsView`, `GatewayClient` (actor: direct WebSocket to the OpenClaw Gateway, device key in Keychain, scopes read/write/approvals/admin; `chat()` streams status/delta/tool/approval/final, `commands()`, `agents()`, `resolveApproval()`; Settings → Colony → Gateway "Test connection"). `ColonyStore.runDirect` drives a turn and falls back to `POST /api/messages`. New Swift files were added to the `.xcodeproj` by script because xcodegen isn't installed (the six files moved into `Colony/` by editing their `path =` in `project.pbxproj`; Xcode still shows them in the flat App group until xcodegen runs).
 - Seams in upstream files (keep small; upstream rule: don't restyle shipped views): `IslandRootView::CompactMiniGrid` (Mochis beside the notch: group 1 = shown Colony agents, group 2 = integration pills; swipe or 5 s auto-flip, dots between groups), `IslandViewContent` (`.prompt`/`.overview` switch), `IslandRootView`/`IslandWindowController` (height, auto-close, drag fixes, `reanchorToScreen` on `didChangeScreenParameters` so the island follows an external display being plugged/unplugged),
   `IslandViewContent::ApprovalView` (Colony and Gateway questions: `pillId == "colony"`; `colony-` ids answered via `POST /api/approvals/{id}`, `gateway-` ids via `GatewayClient.resolveApproval`), `FileDropView`, `UploadSequenceEngine`, `UploadCanvasView`, `ChatMarkdownView` (Thai bold), `SettingsView` (Colony row; Chat hidden while Colony on; AI pills hidden).
+- Handoff: `ColonyService.finishTurn` returns a `Handoff`; `ColonyStore.send` loops `prepareTurn(handoff:)` + `runDirect(onHandoff:)` and drops its local pending message after the first reload (else it shows twice). Settings → agent → Tools → "Accept tasks from teammates" (`accepts_handoff` in the role dict). `LiveBubble` follows the stream at most every 0.4 s. A slash command never uploads the attached window context (`/new` must reach the team-command path, not the decider).
 - Reminders: every agent gets OpenClaw's `cron` tool (`_tool_allowlist`). `ColonyStore.watchReminders()` (started in `AppDelegate`) keeps a Gateway connection (`GatewayClient.watchReminders`: `sessions.subscribe` + listener for event `cron` action `finished`) and shows a ⏰ card in the chat + expands the island. Verified live 2026-10-12 with `@Coder remind me in 2 minutes`: agent created the job (`automations` tool, `at` relative or offset time; a wall-clock time written with `Z` is UTC and fires hours late), it fired, the card appeared. The card is not saved in history.
 - UserDefaults (domain `fr.louisraille.NotchBuddy`): `colonyChatEnabled` (true), `colonyBaseURL`, `colonyWorkspaceId`, `colonyDirectGateway` (true; false = always the HTTP path), `gatewayURL` (`ws://127.0.0.1:18789`), `mochiOnDesktop`.
 - Build: `cd coco_local/NotchBuddy && xcodegen --spec project.yml --project . && xcodebuild -scheme NotchBuddy -configuration Debug build SWIFT_OPTIMIZATION_LEVEL=-O GCC_OPTIMIZATION_LEVEL=s SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=NO`.
@@ -95,3 +98,5 @@ Fork of open-source Coucou (MIT code, not Mochi/sounds). No agent logic, keys or
 - `usage.prompt_tokens` is the sum over a tool loop (gauge can read 37k for a turn that is ~5k).
 - BSD `sed -i` needs `-i ''`; a stale server on :8765 serves old code; children of `colony` must die with it (stdin-pipe lifeline + killpg).
 - MAX_ROLES = 8 (a 9th is a 400).
+- Creating and deleting workspaces quickly on the live system (live tests) edits OpenClaw config; the Gateway reloads itself and can leave an agent's "startup preparation was superseded" (`/new` then hangs on "Getting the team ready…"). A Colony restart clears it.
+- **Restart race (fixed 2026-10-14)**: after `launchctl kickstart -k dev.colony.local` the old Gateway still answered for a second or two (its watcher shell stops it after the old Colony is gone), so the new Colony logged "already running — using it" and then had no Gateway. `cli._start_openclaw` now keeps watching a Gateway it found (`OPENCLAW_ADOPT_POLL_S`, 3 misses in a row) and starts its own when it is gone ("The Gateway on the port is gone — starting one"). Covered by `tests/test_cli.py` (fake listener); not seen to fire on the real machine yet.

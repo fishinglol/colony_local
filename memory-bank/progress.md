@@ -1,6 +1,14 @@
 # Progress — Colony Local
 _Compact changelog, newest first. Details of "how" live in `systemPatterns.md` / `openclaw-capabilities.md`._
 
+## 2026-10-13/14 — handoff in # mix, `/new` archive, native write asks
+- **Handoff between agents** in `# mix`: agents are told their teammates; a reply ending in `@Name task` runs that teammate next (role switch `accepts_handoff`, max 3 hops, enforced in Colony; stored without a fake user row). OpenClaw's `sessions_spawn` not used (see `openclaw-capabilities.md`).
+- **`/new`** moves the old conversation to `~/.colony/archive/`, empties the context gauge, and no longer carries an attached window context (it made the command go to the decider).
+- **Native `write`/`edit` ask** for real: colony-gate handles file-changing and connector tools in native sessions too (the Gateway only asks before `exec`).
+- **Restart race fixed**: Colony watches a Gateway it found on the port and starts its own when it is gone.
+- Coucou: handoff loop, settings switch, duplicate message at the end of a chain fixed, stream scrolling throttled.
+- Found: quick workspace create/delete on the live system can leave an agent "superseded" until a Colony restart.
+
 ## 2026-10-11/12 — Coucou ↔ Gateway directly, skills, native permissions
 - **Skills per agent**: folders under the agent's workspace, allowlist in OpenClaw config, gate allows reading them, decider sees them; Settings → Skills (folder, GitHub, remove); agents can install from chat.
 - **Gateway client** (`GatewayClient.swift`): WebSocket + device identity; direct chat for agent rooms and `# mix` (decider in `prepare`), live status, tool steps, native approvals, "/" command menu, image/PDF attachments. Colony endpoints `/api/turns/prepare|finish`.
