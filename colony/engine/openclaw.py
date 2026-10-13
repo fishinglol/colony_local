@@ -738,6 +738,9 @@ def capability_text(settings: Settings, agent_id: str, role_name: str, tools: An
         if any(takes for _, _, takes in teammates):
             cap_lines.append("  To hand a task to a teammate marked [takes work from you], make the LAST line of your reply `@Name` followed by "
                              "what they should do, in one sentence. Do it only when the task is really theirs; otherwise answer yourself. "
+                             "Hand over to ONE teammate per reply. If the user's request names several steps for different teammates, "
+                             "do your own step, then hand over to the NEXT teammate in that order; they see the whole request and "
+                             "hand on to the one after. "
                              "For the other teammates, tell the user to ask them with @Name.")
         else:
             cap_lines.append("  When a request is better suited to one of them, say so and tell the user to ask that teammate with @Name.")

@@ -644,6 +644,9 @@ def test_an_agent_is_told_who_its_teammates_are_and_what_they_do(monkeypatch):
 
     msg = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "a", "message": "hi"}).json()["message"]
     assert "* Bo: debugging code" in msg and "takes work" not in msg      # the teammate and what it is for
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": [roles[0], {**roles[1], "accepts_handoff": True}]})
+    msg = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "a", "message": "hi"}).json()["message"]
+    assert "[takes work from you]" in msg and "NEXT teammate in that order" in msg
     assert "* Ann:" not in msg                            # not itself
     solo = c.post("/api/workspaces", json={"name": "Solo"}).json()["id"]
     c.put(f"/api/roles?workspace_id={solo}", json={"roles": roles[:1]})
