@@ -19,6 +19,9 @@ class MessageRequest(BaseModel):
     # Which room the user typed in: "auto" (the group chat) or an agent id (that agent's direct chat).
     # Only decides where the message is DISPLAYED; every agent still sees the whole conversation.
     channel: str | None = Field(default=None, max_length=40)
+    # A teammate hands role_id a task (the message): the id of the agent that handed it over, and how many handoffs came before.
+    handoff_from: str | None = Field(default=None, max_length=40)
+    hops: int = Field(default=0, ge=0, le=10)
 
     @model_validator(mode="after")
     def _something_to_send(self) -> "MessageRequest":

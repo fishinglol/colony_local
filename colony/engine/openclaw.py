@@ -476,6 +476,16 @@ def _record_usage(settings: Settings, agent_id: str, model: str, prompt_tokens: 
     _usage_file(settings).write_text(json.dumps(usage), encoding="utf-8")
 
 
+def forget_usage(settings: Settings, agent_ids: list[str]) -> None:
+    """These agents start over ("/new"): their context gauge is empty again until their next turn."""
+    try:
+        usage = json.loads(_usage_file(settings).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if any(usage.pop(a, None) is not None for a in agent_ids):
+        _usage_file(settings).write_text(json.dumps(usage), encoding="utf-8")
+
+
 def last_prompt_tokens(settings: Settings, agent_id: str) -> int | None:
     """Prompt tokens of this agent's last turn, or None when it has not answered yet (or its model has changed since)."""
     try:
@@ -699,7 +709,7 @@ def get_openclaw_status(settings: Settings | None = None) -> dict[str, Any]:
 
 
 def capability_text(settings: Settings, agent_id: str, role_name: str, tools: Any, web_search: bool,
-                    connectors: list[str], folder: str | None) -> str:
+                    connectors: list[str], folder: str | None, teammates: list[tuple[str, str, bool]] | None = None) -> str:
     """What this turn tells the agent about itself: who it is and which tools it has (the system part of a turn)."""
     cap_lines = []
     if web_search:
@@ -722,6 +732,15 @@ def capability_text(settings: Settings, agent_id: str, role_name: str, tools: An
             cap_lines.append(f"  * Through Composio use only these apps: {', '.join(apps)}. If the user asks for another app, say it is not connected to you and stop.")
     if folder:
         cap_lines.append(f"- Workspace Project Folder: {folder}")
+    if teammates:
+        lines = [f"  * {name}: {when[:120]}{' [takes work from you]' if takes else ''}" for name, when, takes in teammates]
+        cap_lines.append("- Your teammates, who answer in this same conversation:\n" + "\n".join(lines))
+        if any(takes for _, _, takes in teammates):
+            cap_lines.append("  To hand a task to a teammate marked [takes work from you], make the LAST line of your reply `@Name` followed by "
+                             "what they should do, in one sentence. Do it only when the task is really theirs; otherwise answer yourself. "
+                             "For the other teammates, tell the user to ask them with @Name.")
+        else:
+            cap_lines.append("  When a request is better suited to one of them, say so and tell the user to ask that teammate with @Name.")
     skills = list_skills(settings, agent_id)
     if skills:
         cap_lines.append("- Your skills (open one with tool `skills_read`, always allowed). When a request matches a skill, call "
@@ -757,6 +776,7 @@ def run_openclaw_turn(
     folder: str | None = None,
     reasoning: str = "default",
     timeout: float = 600.0,
+    teammates: list[tuple[str, str, bool]] | None = None,
 ) -> OpenClawTurnResult:
     """Execute one turn through OpenClaw Gateway.
     
@@ -781,7 +801,7 @@ def run_openclaw_turn(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     else:
-        messages.append({"role": "system", "content": capability_text(settings, agent_id, role_name, tools, web_search, connectors, folder)})
+        messages.append({"role": "system", "content": capability_text(settings, agent_id, role_name, tools, web_search, connectors, folder, teammates)})
 
     # Agent replies in the history already carry their "[Name]" label; roles are kept as they are.
     new_to_session = unseen(settings, session_user, history or [], history_ids or [])

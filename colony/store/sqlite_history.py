@@ -63,14 +63,14 @@ def init_db() -> None:
 def append_exchange_sqlite(
     *,
     conversation_id: str,
-    user_message: str,
+    user_message: str | None,
     assistant_response: dict[str, Any],
     channel: str = "auto",
     attachments: list[dict[str, Any]] | None = None,
-) -> tuple[str, str]:
+) -> tuple[str | None, str]:
     init_db()
     now = datetime.now(timezone.utc).isoformat()
-    user_msg_id = f"msg_{uuid4().hex}"
+    user_msg_id = f"msg_{uuid4().hex}" if user_message is not None else None
     assistant_msg_id = f"msg_{uuid4().hex}"
 
     with get_connection() as conn:
@@ -79,7 +79,7 @@ def append_exchange_sqlite(
         if not cur.fetchone():
             conn.execute(
                 "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (conversation_id, user_message[:64] or "New Chat", now, now),
+                (conversation_id, (user_message or "")[:64] or "New Chat", now, now),
             )
         else:
             conn.execute(
@@ -95,22 +95,24 @@ def append_exchange_sqlite(
         max_seq = seq_cur.fetchone()[0]
 
         # Insert User Message
-        conn.execute(
-            """
-            INSERT INTO messages (
-                id, conversation_id, role, content, channel, attachments_json, created_at, order_seq
-            ) VALUES (?, ?, 'user', ?, ?, ?, ?, ?)
-            """,
-            (
-                user_msg_id,
-                conversation_id,
-                user_message,
-                channel,
-                json.dumps(attachments or []),
-                now,
-                max_seq + 1,
-            ),
-        )
+        if user_message is not None:
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, conversation_id, role, content, channel, attachments_json, created_at, order_seq
+                ) VALUES (?, ?, 'user', ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_msg_id,
+                    conversation_id,
+                    user_message,
+                    channel,
+                    json.dumps(attachments or []),
+                    now,
+                    max_seq + 1,
+                ),
+            )
+            max_seq += 1
 
         # Insert Assistant Message
         conn.execute(
@@ -131,7 +133,7 @@ def append_exchange_sqlite(
                 assistant_response.get("decided_by"),
                 assistant_response.get("confidence"),
                 now,
-                max_seq + 2,
+                max_seq + 1,
             ),
         )
 

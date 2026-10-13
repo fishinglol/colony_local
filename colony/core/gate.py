@@ -69,9 +69,9 @@ def _no(reason: str) -> dict:
     return {"allow": False, "reason": reason}
 
 
-def decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
+def decide(settings: Settings, agent_id: str, tool: str, params: dict, native: bool = False) -> dict:
     """{"allow": bool, "reason": str}. May block while the user decides."""
-    verdict = _decide(settings, agent_id, tool, params)
+    verdict = _decide(settings, agent_id, tool, params, native)
     found = _find(agent_id)
     if verdict["allow"] and found:      # the live status line: what the agent is doing right now
         step = trace_step(tool, params)
@@ -93,7 +93,7 @@ def _ask(role: Role, shown_as: str, kind: str, tool: str, params: dict, settings
     return {"allow": True, "reason": ""} if ok else _no("The user did not approve this action.")
 
 
-def _decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
+def _decide(settings: Settings, agent_id: str, tool: str, params: dict, native: bool = False) -> dict:
     found = _find(agent_id)
     if found is None:
         return _no("Colony does not know this agent.")
@@ -123,6 +123,9 @@ def _decide(settings: Settings, agent_id: str, tool: str, params: dict) -> dict:
         base = folder or agent_dir(settings, agent_id)          # relative paths start where the agent's commands start
         if not escapes(mine, str(Path(base, Path(path).expanduser()))):
             return {"allow": True, "reason": ""}
+    if native and kind in FILE_TOOLS and folder is None:
+        # Chat-only team: the Gateway fenced this session to the team's memory folder, which is what these writes are for.
+        return {"allow": True, "reason": ""}
     if kind in FILE_TOOLS or kind == "bash":
         if folder is None:
             return _no("This workspace has no project folder, so files and commands are off.")

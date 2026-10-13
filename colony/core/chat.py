@@ -152,6 +152,7 @@ def handle_message(request: MessageRequest) -> MessageResponse:
                 connectors=connectors_for(role),
                 media=media,
                 folder=folder,
+                teammates=[(r.name, r.when, False) for r in workspace.roles if r.id != role.id],     # handoffs run in the app's native turns only
                 # a level left over from a previous (reasoning) model must not reach a model that cannot think
                 reasoning=role.reasoning if OLLAMA_CLOUD_MODELS.get(normalize_ollama_model_id(role.model), {}).get("reasoning") else "default",
             )

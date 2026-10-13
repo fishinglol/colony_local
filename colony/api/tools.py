@@ -26,12 +26,13 @@ class GateCall(BaseModel):
     agent_id: str
     tool: str
     params: dict = {}
+    native: bool = False     # the call comes from a session the app runs on the Gateway (its fence is already in place)
 
 
 @router.post("/approvals/gate")
 def gate(call: GateCall) -> dict:
     """Called by OpenClaw (colony-gate.ts) before each tool call. Blocks while the user is being asked."""
-    return decide(get_settings(), call.agent_id, call.tool, call.params)
+    return decide(get_settings(), call.agent_id, call.tool, call.params, native=call.native)
 
 
 class ToolResult(BaseModel):

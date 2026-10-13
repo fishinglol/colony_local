@@ -6,6 +6,7 @@ Changes:
 - Removed project_id (not used in local)
 - Data path: ~/.colony/history.json
 """
+import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -32,12 +33,13 @@ def create_message_id() -> str:
 def append_exchange(
     *,
     conversation_id: str,
-    user_message: str,
+    user_message: str | None,
     assistant_response: dict[str, Any],
     channel: str = "auto",
     attachments: list[dict[str, Any]] | None = None,
-) -> tuple[str, str]:
-    """Append one user+assistant exchange. Returns (user_msg_id, assistant_msg_id)."""
+) -> tuple[str | None, str]:
+    """Append one user+assistant exchange. Returns (user_msg_id, assistant_msg_id).
+    `user_message=None`: only the reply is stored (a teammate answering a handoff; nobody typed anything)."""
     now = datetime.now(timezone.utc).isoformat()
     store = _store()
     data = store.read()
@@ -46,7 +48,7 @@ def append_exchange(
     if not existing:
         existing = {
             "id": conversation_id,
-            "title": user_message[:64],
+            "title": (user_message or "")[:64],
             "messages": [],
             "created_at": now,
             "updated_at": now,
@@ -54,10 +56,10 @@ def append_exchange(
         }
         conversations.insert(0, existing)
 
-    user_msg_id = create_message_id()
+    user_msg_id = create_message_id() if user_message is not None else None
     assistant_msg_id = create_message_id()
     existing["updated_at"] = now
-    existing["messages"].extend([
+    existing["messages"].extend(([
         {
             "id": user_msg_id,
             "role": "user",
@@ -71,7 +73,7 @@ def append_exchange(
             "importance": None,
             "topic_confidence": None,
             "evict_eligible_since_turn": None,
-        },
+        }] if user_message is not None else []) + [
         {
             "id": assistant_msg_id,
             "role": "assistant",
@@ -196,6 +198,31 @@ def list_conversations() -> list[dict[str, Any]]:
             "updated_at": c.get("updated_at", ""),
         })
     return result
+
+
+def archive_before(conversation_id: str, keep_last: int) -> int:
+    """Move every message except the last `keep_last` out of the conversation into
+    ~/.colony/archive/<conversation_id>/<timestamp>.json, so a conversation the user started over ("/new") stays small
+    for the app but is kept. The file is written before anything is removed. Returns how many messages moved."""
+    store = _store()
+    data = store.read()
+    for c in data.get("conversations", []):
+        if c.get("id") != conversation_id:
+            continue
+        messages = c.get("messages", [])
+        old = messages[:-keep_last] if keep_last else list(messages)
+        if not old:
+            return 0
+        now = datetime.now(timezone.utc)
+        folder = get_settings().data_dir / "archive" / conversation_id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{now.strftime('%Y%m%d-%H%M%S')}.json").write_text(
+            json.dumps({"conversation_id": conversation_id, "archived_at": now.isoformat(), "messages": old},
+                       ensure_ascii=False, indent=1), encoding="utf-8")
+        c["messages"] = messages[len(old):]
+        store.write(data)
+        return len(old)
+    return 0
 
 
 def delete_conversation(conversation_id: str) -> None:

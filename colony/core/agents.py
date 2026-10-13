@@ -74,6 +74,7 @@ class Role(BaseModel):
     tools: ToolAccess = Field(default_factory=ToolAccess)
     reasoning: ReasoningLevel = "default"
     web_search: bool = False     # let the model search the web (OpenClaw's web_search tool)
+    accepts_handoff: bool = False   # teammates may hand this agent a task (a reply ending in "@Name ..."); off = only the user asks it
 
     @field_validator("model")
     @classmethod

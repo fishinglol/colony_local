@@ -630,6 +630,96 @@ def test_a_group_chat_turn_asks_the_decider_who_answers(monkeypatch):
     assert last["metadata"]["role_id"] == "b" and last["metadata"]["decided_by"] == "jev" and last["metadata"]["channel"] == "auto"
 
 
+def test_an_agent_is_told_who_its_teammates_are_and_what_they_do(monkeypatch):
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "Team"}).json()["id"]
+    roles = [{"id": "a", "name": "Ann", "model": "ollama/x", "when": "casual chat"},
+             {"id": "b", "name": "Bo", "model": "ollama/y", "when": "debugging code"}]
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+
+    msg = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "a", "message": "hi"}).json()["message"]
+    assert "* Bo: debugging code" in msg and "takes work" not in msg      # the teammate and what it is for
+    assert "* Ann:" not in msg                            # not itself
+    solo = c.post("/api/workspaces", json={"name": "Solo"}).json()["id"]
+    c.put(f"/api/roles?workspace_id={solo}", json={"roles": roles[:1]})
+    msg = c.post("/api/turns/prepare", json={"workspace_id": solo, "role_id": "a", "message": "hi"}).json()["message"]
+    assert "teammates" not in msg                         # alone in the team: nothing to say
+
+
+def test_a_reply_that_ends_with_an_at_name_hands_the_task_to_a_teammate_who_accepts_it(monkeypatch):
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "Hand"}).json()["id"]
+    roles = [{"id": "a", "name": "Ann", "model": "ollama/x", "when": "chat"},
+             {"id": "b", "name": "Bo", "model": "ollama/y", "when": "review code", "accepts_handoff": True},
+             {"id": "c", "name": "Cy", "model": "ollama/z", "when": "write"}]          # Cy does not take work
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    prep = lambda **b: c.post("/api/turns/prepare", json={"workspace_id": ws, **b})
+    finish = lambda p, reply: c.post("/api/turns/finish", json={"turn_id": p["turn_id"], "reply": reply}).json()
+
+    first = prep(role_id="a", message="check my code").json()
+    assert "* Bo: review code [takes work from you]" in first["message"] and "* Cy: write\n" in first["message"] + "\n"
+    done = finish(first, "Here it is.\n@bo please review the function above.")
+    assert done["handoff"] == {"role_id": "b", "role_name": "Bo", "message": "please review the function above.", "from": "a", "hops": 1}
+    assert "handoff" not in finish(prep(role_id="a", message="x").json(), "@Cy write it")     # Cy accepts nothing
+    assert "handoff" not in finish(prep(role_id="a", message="x").json(), "Ask @Bo about it")  # not the last line's start
+
+    second = prep(role_id="b", message=done["handoff"]["message"], handoff_from="a", hops=1).json()
+    assert second["decided_by"] == "handoff" and "Ann hands you this task" in second["message"]
+    finish(second, "[Bo] Looks fine.")
+    msgs = c.get(f"/api/workspaces/{ws}/messages").json()["messages"]
+    assert msgs[-1]["content"] == "Looks fine." and msgs[-1]["metadata"]["handed_by"] == "Ann"
+    assert msgs[-2]["content"] != done["handoff"]["message"]                    # the task is not stored as something the user said
+
+    # refused: Cy does not accept handoffs, an unknown sender, too many hops
+    assert prep(role_id="c", message="t", handoff_from="a", hops=1).status_code == 404
+    assert prep(role_id="b", message="t", handoff_from="zzz", hops=1).status_code == 404
+    assert prep(role_id="b", message="t", handoff_from="a", hops=4).status_code == 404
+    # the last allowed hop does not hand on again
+    last = prep(role_id="b", message="t", handoff_from="a", hops=3).json()
+    roles[0]["accepts_handoff"] = True
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    assert "handoff" not in finish(last, "@Ann your turn")
+
+
+def test_new_moves_the_old_conversation_to_the_archive_and_keeps_only_the_command(monkeypatch):
+    import json as _json
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "Fresh", "folder": ""}).json()["id"]
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": [{"id": "a", "name": "Ann", "model": "ollama/x", "when": "chat"}]})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    say = lambda text, reply: c.post("/api/turns/finish", json={
+        "turn_id": c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "a", "message": text}).json()["turn_id"],
+        "reply": reply}).json()
+    for i in range(3):
+        assert "archived" not in say(f"question {i}", f"answer {i}")
+    settings = get_settings()
+    openclaw._record_usage(settings, openclaw.agent_id_for(ws, "a"), "ollama/x", 5000)
+    assert openclaw.last_prompt_tokens(settings, openclaw.agent_id_for(ws, "a")) == 5000
+    done = say("/new", "New session started.")
+    assert done["archived"] == 6
+    assert openclaw.last_prompt_tokens(settings, openclaw.agent_id_for(ws, "a")) is None      # its gauge starts empty again
+    shown = c.get(f"/api/workspaces/{ws}/messages").json()["messages"]
+    assert [m["content"] for m in shown] == ["/new", "New session started."]
+    files = sorted((get_settings().data_dir / "archive" / ws).glob("*.json"))
+    assert len(files) == 1
+    kept = _json.loads(files[0].read_text(encoding="utf-8"))["messages"]
+    assert [m["content"] for m in kept] == ["question 0", "answer 0", "question 1", "answer 1", "question 2", "answer 2"]
+
+
 def test_a_github_link_becomes_a_clone_url_and_only_github_over_https_is_accepted(tmp_path, monkeypatch):
     assert openclaw.github_clone_url("https://github.com/ScrapeCreators/social-media-research-skills") == \
         "https://github.com/ScrapeCreators/social-media-research-skills.git"

@@ -233,3 +233,21 @@ def test_memory_lives_inside_the_project_folder_and_the_old_copy_is_moved_in_onc
     assert (mem / ".gitignore").read_text(encoding="utf-8") == "*\n"
     (mem / "USER.md").write_text("# User\n- name: Fais\n- city: Bangkok\n", encoding="utf-8")
     assert "Bangkok" in (openclaw.memory_dir(settings, "ws_9") / "USER.md").read_text(encoding="utf-8")   # not copied over again
+
+
+def test_a_native_session_is_still_asked_before_it_writes_but_not_in_a_chat_only_team(tmp_path, answers):
+    ws, agent = team(tmp_path, write="ask")
+    answers.reply = False
+    denied = gate.decide(get_settings(), agent, "write", {"path": "notes.md", "content": "x"}, native=True)
+    assert denied["allow"] is False and answers.asked[0]["tool"] == "write"
+    answers.reply = True
+    assert gate.decide(get_settings(), agent, "edit", {"path": "notes.md", "edits": []}, native=True)["allow"] is True
+    # no project folder: the session is fenced to the memory folder by the Gateway, so nothing to ask and nothing to refuse
+    chat = client.post("/api/workspaces", json={"name": "Chat only", "folder": ""}).json()["id"]
+    client.put(f"/api/roles?workspace_id={chat}", json={"roles": [
+        {"id": "coder", "name": "Coder", "model": "ollama/test", "when": "code", "tools": {"write": "ask"}}]})
+    asked_before = len(answers.asked)
+    assert gate.decide(get_settings(), openclaw.agent_id_for(chat, "coder"), "write", {"path": "MEMORY.md", "content": "x"}, native=True)["allow"] is True
+    assert len(answers.asked) == asked_before
+    # the same call outside a native session is still refused (no folder)
+    assert ask(openclaw.agent_id_for(chat, "coder"), "write", path="MEMORY.md", content="x")["allow"] is False
