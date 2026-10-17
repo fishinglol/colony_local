@@ -89,6 +89,10 @@ def describe(tool: str, params: dict | None, result: Any = None, error: str | No
         kind, title, detail = "web", "Searched the web", str(params.get("query") or "")
     elif tool == "web_fetch":
         kind, title, detail = "web", "Opened a page", str(params.get("url") or "")
+    elif tool.endswith("sessions_spawn"):      # OpenClaw's own delegation: the agent asks a teammate to do part of the work
+        kind, title, detail = "delegate", "Asked a teammate", str(params.get("task") or "")
+    elif tool.endswith("sessions_yield"):
+        kind, title = "delegate", "Waited for the teammate"
     elif "__" in tool:
         server, _, name = tool.partition("__")
         kind, title, detail = "connector", f"Used {server}", name

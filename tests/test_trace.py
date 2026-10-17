@@ -21,6 +21,8 @@ def test_steps_say_what_happened_in_plain_words():
     assert trace.describe("web_search", {"query": "btc"})["title"] == "Searched the web"
     conn = trace.describe("composio__GITHUB_LIST", {"repo": "x"})
     assert (conn["kind"], conn["title"], conn["detail"]) == ("connector", "Used composio", "GITHUB_LIST")
+    ask = trace.describe("sessions_spawn", {"agentId": "ws_1-b", "task": "check the numbers"})
+    assert (ask["kind"], ask["title"], ask["detail"]) == ("delegate", "Asked a teammate", "check the numbers")
     failed = trace.describe("exec", {"command": "false"}, None, "exit 1")
     assert failed["ok"] is False and failed["output"] == "exit 1"
     assert len(trace.describe("exec", {"command": "x"}, "y" * 10_000)["output"]) == trace.OUTPUT_LIMIT

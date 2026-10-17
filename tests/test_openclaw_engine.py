@@ -723,6 +723,29 @@ def test_new_moves_the_old_conversation_to_the_archive_and_keeps_only_the_comman
     assert [m["content"] for m in kept] == ["question 0", "answer 0", "question 1", "answer 1", "question 2", "answer 2"]
 
 
+def test_an_attached_image_is_kept_in_the_memory_folder_and_goes_with_a_handoff(monkeypatch):
+    import base64
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "Pic", "folder": ""}).json()["id"]
+    roles = [{"id": "a", "name": "Ann", "model": "ollama/x", "when": "chat"},
+             {"id": "b", "name": "Bo", "model": "ollama/y", "when": "notes", "accepts_handoff": True}]
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda *a, **k: None)
+    png = c.post(f"/api/workspaces/{ws}/attachments",
+                 json={"name": "shot.png", "data": base64.b64encode(b"\x89PNG fake").decode()}).json()["id"]
+    first = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "a", "message": "keep this", "attachments": [png]}).json()
+    saved = openclaw.memory_dir(get_settings(), ws) / "attachments" / f"{png[:8]}-shot.png"
+    assert saved.read_bytes() == b"\x89PNG fake" and f"[Saved copy of shot.png: {saved}]" in first["message"]
+    # the teammate is handed the same attachment, so it sees the image too
+    second = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "b", "message": "write it down", "handoff_from": "a",
+                                                "hops": 1, "attachments": [png]}).json()
+    assert [a["fileName"] for a in second["attachments"]] == ["shot.png"] and str(saved) in second["message"]
+
+
 def test_a_github_link_becomes_a_clone_url_and_only_github_over_https_is_accepted(tmp_path, monkeypatch):
     assert openclaw.github_clone_url("https://github.com/ScrapeCreators/social-media-research-skills") == \
         "https://github.com/ScrapeCreators/social-media-research-skills.git"
@@ -779,3 +802,35 @@ def test_a_native_turn_is_fenced_by_the_gateway_to_the_project_folder(monkeypatc
     c.put(f"/api/roles?workspace_id={nofolder}", json={"roles": [roles[2]]})
     chat_only = c.post("/api/turns/prepare", json={"workspace_id": nofolder, "role_id": "t", "message": "x"}).json()
     assert chat_only["cwd"] == str(openclaw.memory_dir(get_settings(), nofolder)) and chat_only["permission_mode"] == "guarded"
+
+
+def test_a_delegating_agent_spawns_teammates_through_openclaw_not_through_at_name(monkeypatch):
+    c = TestClient(app)
+    ws = c.post("/api/workspaces", json={"name": "Team"}).json()["id"]
+    roles = [{"id": "a", "name": "Ann", "model": "ollama/x", "when": "plans", "delegates": True},
+             {"id": "b", "name": "Bo", "model": "ollama/y", "when": "debugging code", "accepts_handoff": True},
+             {"id": "c", "name": "Cy", "model": "ollama/z", "when": "writing"}]
+    c.put(f"/api/roles?workspace_id={ws}", json={"roles": roles})
+    monkeypatch.setenv("MOCK_MODE", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(openclaw, "is_openclaw_available", lambda settings=None: True)
+    monkeypatch.setattr(openclaw, "gateway_prepared", lambda settings, **k: True)
+    calls = []
+    monkeypatch.setattr(openclaw, "ensure_agent", lambda settings, agent_id, name, **k: calls.append((agent_id, k.get("delegate_to"))))
+
+    msg = c.post("/api/turns/prepare", json={"workspace_id": ws, "role_id": "a", "message": "hi"}).json()["message"]
+    bo = openclaw.agent_id_for(ws, "b")
+    assert "sessions_spawn" in msg and f"`{bo}`" in msg and "@Name" not in msg.replace("Do not write @Name lines.", "")
+    assert "Cy = agentId" not in msg                                         # only a teammate that takes work can be spawned
+    assert (openclaw.agent_id_for(ws, "a"), [bo]) in calls                   # Ann may spawn exactly Bo
+    assert (bo, None) in calls                                               # Bo exists in OpenClaw before Ann names it
+
+
+def test_capability_text_tells_agents_how_to_set_a_reminder():
+    from colony.config import get_settings
+    from colony.engine.openclaw import capability_text
+
+    text = capability_text(get_settings(), "a", "Buddy", None, False, [], None)
+    line = next(l for l in text.splitlines() if l.startswith("- Reminders"))
+    assert "`automations`" in line and "never write the call out as text" in line
+    assert "Now is 20" in line and "ONLY after the tool returned success" in line

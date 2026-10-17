@@ -35,6 +35,8 @@ Before implementing:
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
+**Before writing or changing any code, invoke the `ponytail` skill** and follow it for that task.
+
 
 ## 4. Goal-Driven Execution
 
@@ -76,6 +78,15 @@ Colony is a thin layer on the OpenClaw Gateway; most agent features (tools, memo
 approvals, MCP, compaction, plugins) already exist there. Before writing code for a new feature:
 1. Read `memory-bank/openclaw-capabilities.md`.
 2. Search the OpenClaw source `openclaw-main 2/` (tools, plugins, config keys, Gateway methods) for the feature.
-3. If OpenClaw has it: configure or call it, don't rebuild it. If not: say so, then build it.
+3. If OpenClaw has it: configure or call it, don't rebuild it. If not: say so and ask me before building anything (§7).
 
 State in the reply what you found in OpenClaw (or that it has nothing).
+
+## 7. Coucou Only Wraps OpenClaw — Never Adapt It
+
+**ห้ามเอาโค้ดหรือฟีเจอร์ของ OpenClaw มาปรับใช้ใน Colony เด็ดขาด เพราะเป้าหมายของเราคือเอา Coucou มาหุ้ม OpenClaw เท่านั้น**
+
+The goal of this project is only to put Coucou around OpenClaw as its shell. Therefore:
+- Never copy, port, re-implement, or "adapt" OpenClaw code, features or behaviour inside Colony or Coucou.
+- Never modify anything in `openclaw-main 2/`.
+- If a feature seems missing in OpenClaw, do not build a stand-in. Say what is missing and ask me first.

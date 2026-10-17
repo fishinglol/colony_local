@@ -16,7 +16,7 @@ def test_roles_default_then_custom_roundtrip():
     assert [r["id"] for r in client.get("/api/roles").json()["roles"]] == ["reasoning", "chitchat", "writing", "coding"]
     assert client.put("/api/roles", json={"roles": CUSTOM}).status_code == 200
     saved = client.get("/api/roles").json()["roles"]
-    assert [{k: v for k, v in r.items() if k not in ("tools", "reasoning", "web_search", "accepts_handoff")} for r in saved] == CUSTOM
+    assert [{k: v for k, v in r.items() if k not in ("tools", "reasoning", "web_search", "accepts_handoff", "delegates")} for r in saved] == CUSTOM
     assert all(r["tools"] == {"read": "off", "write": "off", "bash": "off", "mcp": "off", "mcp_servers": None, "mcp_apps": []} for r in saved)  # tools are off unless switched on
     assert all(r["reasoning"] == "default" for r in saved)                                  # and reasoning is the model's own
 

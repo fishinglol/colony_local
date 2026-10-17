@@ -74,6 +74,7 @@ class Role(BaseModel):
     tools: ToolAccess = Field(default_factory=ToolAccess)
     reasoning: ReasoningLevel = "default"
     web_search: bool = False     # let the model search the web (OpenClaw's web_search tool)
+    delegates: bool = False         # may spawn teammates that accept work, through OpenClaw's own sessions_spawn (its tool, not Colony's)
     accepts_handoff: bool = False   # teammates may hand this agent a task (a reply ending in "@Name ..."); off = only the user asks it
 
     @field_validator("model")

@@ -380,7 +380,8 @@ def _quiet_background(cfg: dict[str, Any]) -> bool:
 
 def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None, web_search: bool = False,
                  connectors: list[str] | None = None, folder: str | None = None, memory: Path | None = None,
-                 thinking: str = "default", wait_seconds: float = 150.0) -> None:
+                 thinking: str = "default", wait_seconds: float = 150.0,
+                 delegate_to: list[str] | None = None) -> None:
     """Make sure OpenClaw has this agent, set up lean: add/update it in OpenClaw's config (hot reload) and wait until listed.
 
     Lean on purpose: OpenClaw's default prompt is ~46k tokens (every tool schema + skills + bootstrap files); with only the
@@ -390,6 +391,8 @@ def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None
     into an agent workspace); the Colony workspace's shared memory folder is added to its memory search. The model is chosen per turn (x-openclaw-model), not stored here.
     """
     allow = _tool_allowlist(tools, web_search, connectors or [], fenced=bool(folder), skills=bool(list_skills(settings, agent_id)))
+    if delegate_to:     # OpenClaw's own delegation: the agent may spawn exactly these agents and waits for them (sessions_yield)
+        allow += ["sessions_spawn", "sessions_yield"]
     with config_lock:
         cfg = read_config()
         agents = cfg.setdefault("agents", {})
@@ -399,6 +402,8 @@ def ensure_agent(settings: Settings, agent_id: str, name: str, tools: Any = None
         want = {"name": name, "workspace": workspace, "tools": {"profile": "minimal", "alsoAllow": allow},
                 "contextInjection": "continuation-skip",
                 "skills": [skill["name"] for skill in list_skills(settings, agent_id)]}     # only this agent's own skills
+        if delegate_to:
+            want["subagents"] = {"allowAgents": sorted(delegate_to), "delegationMode": "prefer"}
         if thinking != "default":   # the role's reasoning level; "default" leaves the model's own setting
             want["thinkingDefault"] = thinking
         if memory:      # the team's shared memory is searched from every agent's own workspace
@@ -709,7 +714,8 @@ def get_openclaw_status(settings: Settings | None = None) -> dict[str, Any]:
 
 
 def capability_text(settings: Settings, agent_id: str, role_name: str, tools: Any, web_search: bool,
-                    connectors: list[str], folder: str | None, teammates: list[tuple[str, str, bool]] | None = None) -> str:
+                    connectors: list[str], folder: str | None, teammates: list[tuple[str, str, bool]] | None = None,
+                    spawn_ids: dict[str, str] | None = None) -> str:
     """What this turn tells the agent about itself: who it is and which tools it has (the system part of a turn)."""
     cap_lines = []
     if web_search:
@@ -735,7 +741,12 @@ def capability_text(settings: Settings, agent_id: str, role_name: str, tools: An
     if teammates:
         lines = [f"  * {name}: {when[:120]}{' [takes work from you]' if takes else ''}" for name, when, takes in teammates]
         cap_lines.append("- Your teammates, who answer in this same conversation:\n" + "\n".join(lines))
-        if any(takes for _, _, takes in teammates):
+        if spawn_ids:   # this agent delegates through OpenClaw: no "@Name" convention
+            ids = ", ".join(f"{name} = agentId `{aid}`" for name, aid in spawn_ids.items())
+            cap_lines.append(f"  To get a teammate's work done, call `sessions_spawn` with their agentId ({ids}) and a clear task, then "
+                             "`sessions_yield` and wait. When their result comes back, answer the user in your own words. "
+                             "Do it only when the task is really theirs; otherwise answer yourself. Do not write @Name lines.")
+        elif any(takes for _, _, takes in teammates):
             cap_lines.append("  To hand a task to a teammate marked [takes work from you], make the LAST line of your reply `@Name` followed by "
                              "what they should do, in one sentence. Do it only when the task is really theirs; otherwise answer yourself. "
                              "Hand over to ONE teammate per reply. If the user's request names several steps for different teammates, "
@@ -749,6 +760,18 @@ def capability_text(settings: Settings, agent_id: str, role_name: str, tools: An
         cap_lines.append("- Your skills (open one with tool `skills_read`, always allowed). When a request matches a skill, call "
                          "`skills_read` with its name first and follow it:\n" + "\n".join(
                              f"  * {k['name']}: {k['description'][:160]}" for k in skills))
+    can_write = getattr(tools, "write", "off") != "off" if tools else True
+    cap_lines.append("- Saving: you cannot keep an image or a file itself, only text. "
+                     + ("When asked to remember or save something, first write the text worth keeping (for an image: what it shows, in full) "
+                        "into your memory files with `write` or `edit`. " if can_write else
+                        "You have no tool to write files, so you cannot save anything yourself. ")
+                     + "Say it is saved ONLY after a write tool succeeded in this turn, and name the file; otherwise say plainly that you did not save it.")
+    now = datetime.now().astimezone()
+    cap_lines.append(f"- Reminders and timers: call the `automations` tool (action `add`, schedule {{kind:\"at\", at:<ISO-8601 time WITH its offset>}}, "
+                     "payload {kind:\"agentTurn\", message:<what to tell the user>}). A tool CALL, never write the call out as text or JSON in your reply. "
+                     f"Now is {now.isoformat(timespec='seconds')} ({now.strftime('%A')}, UTC{now.strftime('%z')}): add the delay to THIS time and keep this offset "
+                     "(a time written with Z is UTC and fires hours late). Say it is set ONLY after the tool returned success, "
+                     "and give the time it will fire; if it failed, say so.")
     cap_lines.append(f"- Your skills folder: {skills_dir(settings, agent_id)}. To add a skill the user points you to (a folder with SKILL.md), "
                      "read its files and write each to <skills folder>/<skill name>/<same relative path>; the user is asked to approve each file. "
                      "If it is a GitHub link and you may run commands, `git clone --depth 1` it into a temporary folder, "
